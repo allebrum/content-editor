@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/core';
-import type { AiConfig, EditorJsonDocument, EditorJsonFragment, EditorTheme } from '../schema/types';
+import type { Node as PmNode } from '@tiptap/pm/model';
+import type { AiConfig, AssetConfig, EditorJsonDocument, EditorJsonFragment, EditorTheme } from '../schema/types';
 import { callAiEndpoint } from '../ai/aiClient';
 import { LuChevronDown, LuEllipsisVertical, LuLayoutTemplate, LuPlus, LuSparkles, LuTrash2, LuCopy, LuImage } from 'react-icons/lu';
 import { BLOCK_DRAG_MIME } from '../utils/dragDrop';
+import { pickImageAsset } from '../utils/imagePicker';
 
 type HoveredSection = {
   id: string | null;
@@ -96,7 +98,17 @@ const DEFAULT_SYSTEM_COLORS = [
 
 const DEFAULT_THEME_COLORS = ['#d8aff8', '#4f46e5', '#1f2937', '#000000'];
 
-export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor; aiConfig?: AiConfig; theme?: EditorTheme }) {
+export function SectionAddControls({
+  editor,
+  aiConfig,
+  theme,
+  assets,
+}: {
+  editor: Editor;
+  aiConfig?: AiConfig;
+  theme?: EditorTheme;
+  assets?: AssetConfig;
+}) {
   const [hovered, setHovered] = useState<HoveredSection | null>(null);
   const [txTick, setTxTick] = useState(0);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -134,8 +146,14 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
   useEffect(() => {
     const onTransaction = () => setTxTick((v) => v + 1);
     editor.on('transaction', onTransaction);
+    editor.on('selectionUpdate', onTransaction);
+    editor.on('focus', onTransaction);
+    editor.on('blur', onTransaction);
     return () => {
       editor.off('transaction', onTransaction);
+      editor.off('selectionUpdate', onTransaction);
+      editor.off('focus', onTransaction);
+      editor.off('blur', onTransaction);
     };
   }, [editor]);
 
@@ -281,10 +299,25 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
       const current = hoveredRef.current;
       if (!current || !current.zone) return;
       const insertAt = current.zone === 'top' ? current.pos : current.pos + current.nodeSize;
+      const contentAttrs =
+        content.type === 'section' && typeof content.attrs === 'object' && content.attrs
+          ? (content.attrs as Record<string, unknown>)
+          : null;
+      const insertedSectionId =
+        contentAttrs && typeof contentAttrs.id === 'string'
+          ? contentAttrs.id
+          : null;
       editor.chain().focus().insertContentAt(insertAt, content).run();
+
+      if (insertedSectionId) {
+        const sectionPos = findSectionPosById(insertedSectionId);
+        if (typeof sectionPos === 'number') {
+          editor.commands.focus(sectionPos + 2);
+        }
+      }
       setTemplateOpen(false);
     },
-    [editor],
+    [editor, findSectionPosById],
   );
 
   const updateCurrentSectionAttrs = useCallback(
@@ -427,11 +460,88 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
     [theme?.sectionThemeColors],
   );
 
-  if (!hovered) return null;
+  const getSectionStarterMode = useCallback((sectionNode: PmNode): 'title-only' | 'body-empty' | null => {
+    const children = Array.from({ length: sectionNode.childCount }, (_, i) => sectionNode.child(i));
+    const hasTypedText = children.some((child) => child.textContent.trim().length > 0);
+    if (hasTypedText) return null;
 
-  return createPortal(
+    if (children.length === 1) {
+      const first = children[0];
+      if (first.type.name === 'heading' && first.attrs?.level === 1) return 'title-only';
+      if (first.type.name === 'paragraph') return 'title-only';
+      return null;
+    }
+
+    if (children.length === 2) {
+      const first = children[0];
+      const second = children[1];
+      if (first.type.name === 'heading' && first.attrs?.level === 1 && second.type.name === 'paragraph') {
+        return 'body-empty';
+      }
+    }
+
+    return null;
+  }, []);
+
+  const activeStarterSection = useMemo(() => {
+    try {
+      if (!editor.isFocused) return null;
+      const { selection } = editor.state;
+      const $from = selection.$from;
+      for (let d = $from.depth; d >= 1; d--) {
+        const node = $from.node(d);
+        if (node.type.name !== 'section') continue;
+        const starterMode = getSectionStarterMode(node);
+        if (!starterMode) return null;
+        const sectionPos = $from.before(d);
+        const dom = editor.view.nodeDOM(sectionPos);
+        if (!(dom instanceof Element)) return null;
+        return {
+          pos: sectionPos,
+          rect: dom.getBoundingClientRect(),
+          nodeSize: node.nodeSize,
+          id: typeof node.attrs?.id === 'string' ? node.attrs.id : null,
+          node,
+          mode: starterMode,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [editor, txTick, getSectionStarterMode]);
+
+  const starterHost = useMemo(() => {
+    return editor.view.dom.closest('.ae-editor-root');
+  }, [editor, txTick]);
+
+  const starterStyle = useMemo<React.CSSProperties>(() => {
+    if (!activeStarterSection) return {};
+    const host = editor.view.dom.closest('.ae-editor-root');
+    if (!(host instanceof Element)) return {};
+    const hostRect = host.getBoundingClientRect();
+    const topOffset = activeStarterSection.mode === 'title-only' ? 220 : 74;
+    return {
+      position: 'absolute',
+      top: activeStarterSection.rect.top - hostRect.top + topOffset,
+      left: Math.max(24, activeStarterSection.rect.left - hostRect.left + 18),
+      width: Math.max(420, Math.min(activeStarterSection.rect.width - 40, 980)),
+    };
+  }, [activeStarterSection, editor, txTick]);
+
+  const replaceStarterWithTemplate = useCallback((template: TemplateItem) => {
+    if (!activeStarterSection) return;
+    const from = activeStarterSection.pos;
+    const to = activeStarterSection.pos + activeStarterSection.nodeSize;
+    editor.chain().focus().insertContentAt({ from, to }, template.build()).run();
+  }, [activeStarterSection, editor]);
+
+  if (!hovered) return null;
+  return (
     <>
-      <div ref={sectionControlsRef} className="ae-section-controls" style={sectionControlsStyle}>
+      {createPortal(
+        <>
+      {hovered && <div ref={sectionControlsRef} className="ae-section-controls" style={sectionControlsStyle}>
         <button
           ref={sectionHandleRef}
           className="ae-section-handle"
@@ -498,9 +608,9 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
           <LuSparkles size={14} />
           <LuChevronDown size={13} />
         </button>
-      </div>
+      </div>}
 
-      {hovered.zone && (
+      {hovered?.zone && (
         <div ref={controlsRef} className="ae-section-add" style={controlsStyle}>
           <button className="ae-section-add__btn" onMouseDown={(e) => e.preventDefault()} onClick={onInsertBlank} title="Add blank section">
             <LuPlus size={16} />
@@ -525,7 +635,7 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
         </div>
       )}
 
-      {templateOpen && hovered.zone && (
+      {templateOpen && hovered?.zone && (
         <div ref={templatesRef} className="ae-section-template-menu" style={templateStyle}>
           {TEMPLATES.map((template) => (
             <button
@@ -561,13 +671,16 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
             <button
               className="ae-section-style-popover__link-btn"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
+              onClick={async () => {
                 const sectionPos = hoveredRef.current ? findSectionPosById(hoveredRef.current.id) ?? hoveredRef.current.pos : null;
                 const current = typeof sectionPos === 'number' ? editor.state.doc.nodeAt(sectionPos) : null;
-                const existing = current?.attrs?.background?.imageUrl ?? '';
-                const imageUrl = window.prompt('Section background image URL:', existing);
-                if (!imageUrl?.trim()) return;
-                updateCurrentSectionAttrs({ background: { type: 'image', imageUrl: imageUrl.trim(), opacity: 0.2 } });
+                const picked = await pickImageAsset(assets, {
+                  kind: 'image',
+                  context: 'section-background',
+                  currentUrl: current?.attrs?.background?.imageUrl ?? '',
+                });
+                if (!picked?.url) return;
+                updateCurrentSectionAttrs({ background: { type: 'image', imageUrl: picked.url, opacity: 0.2 } });
               }}
             >
               + Add
@@ -730,13 +843,16 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
               <button
                 className="ae-section-style-popover__icon-btn"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
+                onClick={async () => {
                   const sectionPos = hoveredRef.current ? findSectionPosById(hoveredRef.current.id) ?? hoveredRef.current.pos : null;
                   const current = typeof sectionPos === 'number' ? editor.state.doc.nodeAt(sectionPos) : null;
-                  const existing = current?.attrs?.backdrop?.imageUrl ?? '';
-                  const imageUrl = window.prompt('Section backdrop image URL:', existing);
-                  if (!imageUrl?.trim()) return;
-                  updateCurrentSectionAttrs({ backdrop: { type: 'image', imageUrl: imageUrl.trim(), opacity: 0.08 } });
+                  const picked = await pickImageAsset(assets, {
+                    kind: 'image',
+                    context: 'section-backdrop',
+                    currentUrl: current?.attrs?.backdrop?.imageUrl ?? '',
+                  });
+                  if (!picked?.url) return;
+                  updateCurrentSectionAttrs({ backdrop: { type: 'image', imageUrl: picked.url, opacity: 0.08 } });
                 }}
                 title="Backdrop image"
               >
@@ -839,5 +955,7 @@ export function SectionAddControls({ editor, aiConfig, theme }: { editor: Editor
       )}
     </>,
     document.body,
+      )}
+    </>
   );
 }

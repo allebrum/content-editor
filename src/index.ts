@@ -65,9 +65,11 @@ export type {
   AiEditorRequest,
   AiEditorResponse,
   AiEditorResponseType,
-  EditorSelectionPayload,
-  // Asset config
-  AssetConfig,
+   EditorSelectionPayload,
+   // Asset config
+   AssetConfig,
+   MediaPickerRequest,
+   MediaPickerResult,
   // Block registry
   BlockDefinition,
   // Theme

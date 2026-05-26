@@ -16,6 +16,7 @@ A Gamma-style block-based page editor for React and Next.js applications. Gives 
 - **Autosave** — debounced autosave with status callbacks
 - **Embedded mode** — lightweight editor for descriptions, bios, and small content fields
 - **Asset handling** — hook up your own upload/media-picker endpoints
+- **Starter section UX** — empty sections auto-start as H1 with quick template/image actions
 
 ## Installation
 
@@ -76,6 +77,16 @@ export function PageEditView({ page, onSave }) {
       assets={{
         uploadEndpoint: '/api/editor-assets',
         pickerEndpoint: '/api/media-library',
+        openMediaPicker: async ({ kind, context, currentUrl }) => {
+          // Open your media library/modal and return the selected image.
+          // Return null if the user cancels.
+          return {
+            url: 'https://cdn.example.com/media/hero.jpg',
+            alt: 'Selected image',
+            assetId: 'asset_123',
+          };
+        },
+        placeholderImageUrl: 'https://placehold.co/1600x900/png?text=Selected+Image',
       }}
       permissions={{
         canEditLayout: true,
@@ -148,6 +159,10 @@ Full-page editor component.
     uploadEndpoint: '/api/editor-assets',
     pickerEndpoint: '/api/media-library',
     resolveUrl: (asset) => asset.url,
+    openMediaPicker: async ({ kind, context, currentUrl }) => {
+      return openYourMediaModal({ kind, context, currentUrl });
+    },
+    placeholderImageUrl: 'https://placehold.co/1600x900/png?text=Selected+Image',
   }}
   permissions={{
     canEditText: true,
@@ -177,6 +192,26 @@ Full-page editor component.
   ]}
 />
 ```
+
+#### `assets.openMediaPicker` contract
+
+```ts
+type MediaPickerRequest = {
+  kind: 'image';
+  context: 'image-block' | 'section-background' | 'section-backdrop';
+  currentUrl?: string;
+};
+
+type MediaPickerResult = {
+  url: string;
+  alt?: string;
+  assetId?: string;
+  width?: number;
+  height?: number;
+};
+```
+
+Image actions call this hook when available (slash image, section background/backdrop image pickers, and starter-section image action). If omitted, the editor inserts a placeholder image URL (`assets.placeholderImageUrl` or the default placehold URL).
 
 #### `EditorSaveResult`
 

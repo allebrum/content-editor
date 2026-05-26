@@ -18,7 +18,7 @@ export const DocumentSection = Node.create<SectionOptions>({
   group: 'block',
   content: 'block+',
   defining: true,
-  isolating: false,
+  isolating: true,
 
   addOptions() {
     return { HTMLAttributes: {} };

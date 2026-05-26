@@ -11,6 +11,8 @@ import {
   LuSmartphone, LuMonitor,
   LuLayoutTemplate, LuImage,
 } from 'react-icons/lu';
+import type { AssetConfig } from '../schema/types';
+import { pickImageAsset } from '../utils/imagePicker';
 
 interface BlockContextMenuProps {
   editor: Editor;
@@ -18,6 +20,7 @@ interface BlockContextMenuProps {
   pos: number;
   x: number;
   y: number;
+  assets?: AssetConfig;
   onClose: () => void;
 }
 
@@ -35,7 +38,7 @@ type MenuSection = {
   items: MenuEntry[];
 };
 
-export function BlockContextMenu({ editor, node, pos, x, y, onClose }: BlockContextMenuProps) {
+export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: BlockContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close on outside click / Escape
@@ -250,11 +253,14 @@ export function BlockContextMenu({ editor, node, pos, x, y, onClose }: BlockCont
       setAttr({ background: { type: 'color', color } });
     };
 
-    const setBackgroundImage = () => {
-      const current = currentBackground?.imageUrl ?? '';
-      const imageUrl = window.prompt('Section background image URL:', current);
-      if (!imageUrl?.trim()) return;
-      setAttr({ background: { type: 'image', imageUrl: imageUrl.trim(), opacity: 0.2 } });
+    const setBackgroundImage = async () => {
+      const picked = await pickImageAsset(assets, {
+        kind: 'image',
+        context: 'section-background',
+        currentUrl: currentBackground?.imageUrl ?? '',
+      });
+      if (!picked?.url) return;
+      setAttr({ background: { type: 'image', imageUrl: picked.url, opacity: 0.2 } });
     };
 
     sections.push({

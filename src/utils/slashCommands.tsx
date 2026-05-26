@@ -14,7 +14,12 @@ function ins(fn: InsertFn): InsertFn {
   return fn;
 }
 
-const BUILT_IN_COMMANDS: SlashCommandItem[] = [
+type BuildSlashCommandOptions = {
+  onInsertImage?: (editor: Editor) => void;
+};
+
+function createBuiltInCommands(options?: BuildSlashCommandOptions): SlashCommandItem[] {
+  return [
   // Text
   {
     id: 'paragraph',
@@ -179,13 +184,16 @@ const BUILT_IN_COMMANDS: SlashCommandItem[] = [
     keywords: ['photo', 'picture', 'img'],
     icon: LuImage,
     insert: ins(({ editor }) => {
-      const url = window.prompt('Image URL:');
-      if (url) {
-        editor.chain().focus().insertContent({
-          type: 'imageBlock',
-          attrs: { src: url, alt: '', alignment: 'center' },
-        }).run();
+      if (options?.onInsertImage) {
+        options.onInsertImage(editor);
+        return;
       }
+      const url = window.prompt('Image URL:');
+      if (!url) return;
+      editor.chain().focus().insertContent({
+        type: 'imageBlock',
+        attrs: { src: url, alt: '', alignment: 'center' },
+      }).run();
     }),
   },
   {
@@ -298,8 +306,9 @@ const BUILT_IN_COMMANDS: SlashCommandItem[] = [
       }).run();
     }),
   },
-];
+  ];
+}
 
-export function buildSlashCommands(custom: SlashCommandItem[] = []): SlashCommandItem[] {
-  return [...BUILT_IN_COMMANDS, ...custom];
+export function buildSlashCommands(custom: SlashCommandItem[] = [], options?: BuildSlashCommandOptions): SlashCommandItem[] {
+  return [...createBuiltInCommands(options), ...custom];
 }

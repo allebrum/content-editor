@@ -360,6 +360,19 @@
   height: 0;
 }
 
+.ae-editor-content .ProseMirror h1.is-empty::before,
+.ae-editor-content .ProseMirror h2.is-empty::before,
+.ae-editor-content .ProseMirror h3.is-empty::before,
+.ae-editor-content .ProseMirror h4.is-empty::before,
+.ae-editor-content .ProseMirror h5.is-empty::before,
+.ae-editor-content .ProseMirror h6.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--ae-gray-400);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
 /* 
    4. EDITING  only visible in edit mode [data-ae-edit]AFFORDANCES 
    These visual hints (dashed borders, spacer labels, column outlines) help
@@ -999,6 +1012,144 @@
 
 [data-ae-edit] .ae-editor-content .ProseMirror > [data-type="section"] + [data-type="section"] {
   margin-top: 0;
+}
+
+/* Empty section starter prompt */
+.ae-section-starter {
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.ae-section-starter--inline {
+  margin: 0;
+}
+
+.ae-section-starter--title-only {
+  margin-top: 0;
+}
+
+.ae-section-starter--body-empty {
+  margin-top: 0;
+}
+
+.ae-section-starter__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 20px;
+  font-weight: 500;
+  background: transparent;
+  flex-wrap: wrap;
+}
+
+.ae-section-starter__row kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  font-size: 15px;
+  color: #64748b;
+  background: #ffffff;
+}
+
+.ae-section-starter__row button {
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 14px;
+  color: #334155;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ae-section-starter__row button:hover {
+  background: #f8fafc;
+}
+
+.ae-section-starter__templates {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 18px;
+}
+
+.ae-section-starter__templates > div {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ae-section-starter__templates button {
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: #334155;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ae-section-starter__templates button:hover {
+  background: #f8fafc;
+}
+
+/* Inline quick actions for blank paragraph line */
+.ae-inline-quick-actions {
+  position: absolute;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ae-inline-quick-actions kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 21px;
+  height: 21px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #64748b;
+  background: #ffffff;
+}
+
+.ae-inline-quick-actions button {
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  color: #334155;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.ae-inline-quick-actions button:hover {
+  background: #f8fafc;
 }
 
 /* Section quick-add controls */

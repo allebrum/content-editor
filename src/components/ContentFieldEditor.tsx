@@ -3,6 +3,7 @@ import type {
   EditorJsonDocument,
   EditorPermissions,
   AiConfig,
+  AssetConfig,
   EditorTheme,
   SlashCommandItem,
 } from '../schema/types';
@@ -23,6 +24,8 @@ export interface ContentFieldEditorProps {
   allowedBlocks?: string[];
   /** AI configuration */
   ai?: AiConfig;
+  /** Asset upload/picker configuration */
+  assets?: AssetConfig;
   /** User permissions override */
   permissions?: EditorPermissions;
   /** Extra slash commands */
@@ -45,6 +48,7 @@ export function ContentFieldEditor({
   maxHeight,
   allowedBlocks,
   ai,
+  assets,
   permissions = {},
   slashCommands,
   className,
@@ -80,6 +84,7 @@ export function ContentFieldEditor({
         editable={!readOnly && permissions.canEditText !== false}
         permissions={mergedPermissions}
         ai={ai}
+        assets={assets}
         theme={theme}
         slashCommands={slashCommands}
         autofocus={autofocus}

@@ -6,6 +6,7 @@ import { TextSelection } from '@tiptap/pm/state';
 import { LuGripVertical } from 'react-icons/lu';
 import { BlockContextMenu } from './BlockContextMenu';
 import { BLOCK_DRAG_MIME } from '../utils/dragDrop';
+import type { AssetConfig } from '../schema/types';
 
 interface BlockInfo {
   domNode: Element;
@@ -21,7 +22,7 @@ interface DropIndicator {
   width: number;
 }
 
-export function BlockHandle({ editor }: { editor: Editor }) {
+export function BlockHandle({ editor, assets }: { editor: Editor; assets?: AssetConfig }) {
   const [hovered, setHovered] = useState<BlockInfo | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
@@ -473,6 +474,7 @@ export function BlockHandle({ editor }: { editor: Editor }) {
           pos={hovered.pos}
           x={menuPos.x}
           y={menuPos.y}
+          assets={assets}
           onClose={() => { setMenuOpen(false); setHovered(null); }}
         />
       )}

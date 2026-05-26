@@ -411,6 +411,29 @@ export type AssetConfig = {
   uploadEndpoint?: string;
   pickerEndpoint?: string;
   resolveUrl?: (asset: EditorAsset) => string;
+  /**
+   * Optional hook to open your app's media library.
+   * Return null when user cancels.
+   */
+  openMediaPicker?: (request: MediaPickerRequest) => Promise<MediaPickerResult | null> | MediaPickerResult | null;
+  /**
+   * Placeholder image URL used when no picker is configured.
+   */
+  placeholderImageUrl?: string;
+};
+
+export type MediaPickerRequest = {
+  kind: 'image';
+  context: 'image-block' | 'section-background' | 'section-backdrop';
+  currentUrl?: string;
+};
+
+export type MediaPickerResult = {
+  url: string;
+  alt?: string;
+  assetId?: string;
+  width?: number;
+  height?: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

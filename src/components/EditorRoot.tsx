@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef, useCallback, useEffect } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -26,10 +26,12 @@ import { EmbedBlock } from '../extensions/EmbedBlock';
 import { SvgGraphicBlock } from '../extensions/SvgGraphicBlock';
 import { SlashCommand } from '../extensions/SlashCommand';
 import { buildSlashCommands } from '../utils/slashCommands';
+import { pickImageAsset } from '../utils/imagePicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { BubbleToolbar } from './BubbleToolbar';
 import { BlockHandle } from './BlockHandle';
 import { SectionAddControls } from './SectionAddControls';
+import { BlankLineQuickActions } from './BlankLineQuickActions';
 
 function createDefaultSection() {
   return {
@@ -114,6 +116,30 @@ export const EditorRoot = forwardRef<EditorRootHandle, EditorRootProps>(function
   const slashMenuRef = useRef<{ open: (props: unknown) => void; close: () => void } | null>(null);
   const isNormalizingRef = useRef(false);
 
+  const onInsertImage = useCallback(
+    async (ed: Editor) => {
+      const picked = await pickImageAsset(assets, { kind: 'image', context: 'image-block' });
+      if (!picked?.url) return;
+      ed.chain().focus().insertContent({
+        type: 'imageBlock',
+        attrs: {
+          src: picked.url,
+          alt: picked.alt ?? '',
+          assetId: picked.assetId,
+          width: picked.width,
+          height: picked.height,
+          alignment: 'center',
+        },
+      }).run();
+    },
+    [assets],
+  );
+
+  const slashCommands = useMemo(
+    () => buildSlashCommands(customCommands, { onInsertImage: (ed) => { void onInsertImage(ed); } }),
+    [customCommands, onInsertImage],
+  );
+
   const editor = useEditor({
     editable,
     autofocus,
@@ -121,7 +147,12 @@ export const EditorRoot = forwardRef<EditorRootHandle, EditorRootProps>(function
       StarterKit.configure({
         history: { depth: 100 },
       }),
-      Placeholder.configure({ placeholder }),
+      Placeholder.configure({
+        placeholder: ({ node }) => {
+          if (node.type.name === 'heading' && node.attrs.level === 1) return 'Untitled Section';
+          return placeholder;
+        },
+      }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Underline,
       Link.configure({ openOnClick: false, autolink: true }),
@@ -144,14 +175,13 @@ export const EditorRoot = forwardRef<EditorRootHandle, EditorRootProps>(function
       EmbedBlock,
       SvgGraphicBlock,
       SlashCommand.configure({
-        commands: buildSlashCommands(customCommands),
+        commands: slashCommands,
         suggestion: {
           char: '/',
           items: ({ query }: { query: string }) => {
-            const allCommands = buildSlashCommands(customCommands);
-            if (!query) return allCommands;
+            if (!query) return slashCommands;
             const q = query.toLowerCase();
-            return allCommands.filter(
+            return slashCommands.filter(
               (cmd) =>
                 cmd.label.toLowerCase().includes(q) ||
                 (cmd.keywords ?? []).some((k) => k.includes(q)) ||
@@ -284,8 +314,9 @@ export const EditorRoot = forwardRef<EditorRootHandle, EditorRootProps>(function
       onDrop={handleDrop}
     >
       {editor && <BubbleToolbar editor={editor} aiConfig={canUseAi ? ai : undefined} />}
-      {editor && <BlockHandle editor={editor} />}
-      {editor && <SectionAddControls editor={editor} aiConfig={canUseAi ? ai : undefined} theme={theme} />}
+      {editor && <BlockHandle editor={editor} assets={assets} />}
+      {editor && <SectionAddControls editor={editor} aiConfig={canUseAi ? ai : undefined} theme={theme} assets={assets} />}
+      {editor && <BlankLineQuickActions editor={editor} assets={assets} />}
       <EditorContent editor={editor} className="ae-editor-content" />
       <SlashCommandMenu ref={slashMenuRef} editor={editor ?? null} />
     </div>
