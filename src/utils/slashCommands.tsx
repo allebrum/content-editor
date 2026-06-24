@@ -115,8 +115,8 @@ function createBuiltInCommands(options?: BuildSlashCommandOptions): SlashCommand
         type: 'flexRow',
         attrs: { id: crypto.randomUUID(), gap: 'md', responsive: 'stackOnMobile' },
         content: [
-          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '50' }, content: [{ type: 'paragraph' }] },
-          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '50' }, content: [{ type: 'paragraph' }] },
+          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
+          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
         ],
       }).run();
     }),
@@ -133,9 +133,9 @@ function createBuiltInCommands(options?: BuildSlashCommandOptions): SlashCommand
         type: 'flexRow',
         attrs: { id: crypto.randomUUID(), gap: 'md', responsive: 'stackOnMobile' },
         content: [
-          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '33' }, content: [{ type: 'paragraph' }] },
-          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '33' }, content: [{ type: 'paragraph' }] },
-          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '33' }, content: [{ type: 'paragraph' }] },
+          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
+          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
+          { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
         ],
       }).run();
     }),

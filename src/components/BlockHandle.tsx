@@ -5,7 +5,7 @@ import type { Node as PmNode } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
 import { LuGripVertical } from 'react-icons/lu';
 import { BlockContextMenu } from './BlockContextMenu';
-import { BLOCK_DRAG_MIME } from '../utils/dragDrop';
+import { BLOCK_DRAG_MIME, getActiveBlockDragSource, setActiveBlockDragSource } from '../utils/dragDrop';
 import type { AssetConfig } from '../schema/types';
 
 interface BlockInfo {
@@ -102,6 +102,21 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
       return null;
     }
   }, [editor]);
+
+  const getBlockAtPos = useCallback((pos: number): BlockInfo | null => {
+    const { view } = editor;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node) return null;
+    const dom = view.nodeDOM(pos);
+    if (!(dom instanceof Element)) return null;
+    return {
+      domNode: dom,
+      pos,
+      node,
+      rect: dom.getBoundingClientRect(),
+      parentSectionPos: getSectionPosAt(pos),
+    };
+  }, [editor, getSectionPosAt]);
 
   const getBlockAt = useCallback((clientX: number, clientY: number): BlockInfo | null => {
     const { view } = editor;
@@ -226,12 +241,10 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
     };
 
     const calcSectionChildDropTarget = (
-      clientX: number,
       clientY: number,
-      fallbackSectionPos: number,
+      sectionPos: number,
     ): { sectionPos: number; insertBefore: number | null; indicatorY: number; x: number; w: number } | null => {
       const { view } = editor;
-      const sectionPos = findTargetSectionPos(clientX, clientY) ?? fallbackSectionPos;
       const sectionNode = view.state.doc.nodeAt(sectionPos);
       const sectionDom = view.nodeDOM(sectionPos);
       if (!sectionNode || sectionNode.type.name !== 'section' || !(sectionDom instanceof Element)) return null;
@@ -259,14 +272,32 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
       };
     };
 
+    const shouldDropInsideSection = (src: BlockInfo, targetSectionPos: number | null): targetSectionPos is number => {
+      if (targetSectionPos === null) return false;
+      if (targetSectionPos === src.pos) return false;
+      if (src.node.type.name === 'section') {
+        const srcFrom = src.pos;
+        const srcTo = src.pos + src.node.nodeSize;
+        if (targetSectionPos > srcFrom && targetSectionPos < srcTo) {
+          return false;
+        }
+      }
+      return true;
+    };
+
     const onDragOver = (e: DragEvent) => {
       if (!hasBlockDragPayload(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer!.dropEffect = 'move';
-      const src = dragSrcRef.current;
-      if (src && src.parentSectionPos !== null) {
-        const target = calcSectionChildDropTarget(e.clientX, e.clientY, src.parentSectionPos);
+      const src = dragSrcRef.current ?? (() => {
+        const active = getActiveBlockDragSource();
+        if (!active) return null;
+        return getBlockAtPos(active.pos);
+      })();
+      const targetSectionPos = src ? findTargetSectionPos(e.clientX, e.clientY) : null;
+      if (src && shouldDropInsideSection(src, targetSectionPos)) {
+        const target = calcSectionChildDropTarget(e.clientY, targetSectionPos);
         if (target) setDropIndicator({ y: target.indicatorY, x: target.x, width: target.w });
         return;
       }
@@ -281,10 +312,16 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
 
       let src = dragSrcRef.current;
       if (!src) {
+        const active = getActiveBlockDragSource();
+        if (active) {
+          src = getBlockAtPos(active.pos);
+        }
+      }
+      if (!src) {
         const raw = e.dataTransfer?.getData(BLOCK_DRAG_MIME);
         const parsedPos = raw ? Number(raw) : NaN;
         if (!Number.isNaN(parsedPos)) {
-          src = getTopLevelBlockAtPos(parsedPos);
+          src = getBlockAtPos(parsedPos);
         }
       }
       if (!src) {
@@ -296,29 +333,31 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
 
       const srcFrom = src.pos;
       const srcTo = src.pos + src.node.nodeSize;
+      const targetSectionPos = findTargetSectionPos(e.clientX, e.clientY);
+      if (shouldDropInsideSection(src, targetSectionPos)) {
+        const target = calcSectionChildDropTarget(e.clientY, targetSectionPos);
+        if (target) {
+          const targetSectionNode = doc.nodeAt(target.sectionPos);
+          if (!targetSectionNode || targetSectionNode.type.name !== 'section') {
+            cleanup();
+            return;
+          }
+          const endPos = target.sectionPos + targetSectionNode.nodeSize - 1;
+          const rawInsertAt = target.insertBefore ?? endPos;
 
-      if (src.parentSectionPos !== null) {
-        const target = calcSectionChildDropTarget(e.clientX, e.clientY, src.parentSectionPos);
-        if (!target) {
+          const slice = doc.slice(srcFrom, srcTo);
+          tr.delete(srcFrom, srcTo);
+          const insertAt = tr.mapping.map(rawInsertAt, -1);
+          if (insertAt !== srcFrom) {
+            tr.insert(insertAt, slice.content);
+            view.dispatch(tr);
+          }
           cleanup();
           return;
         }
-        const targetSectionNode = doc.nodeAt(target.sectionPos);
-        if (!targetSectionNode || targetSectionNode.type.name !== 'section') {
-          cleanup();
-          return;
-        }
-        const endPos = target.sectionPos + targetSectionNode.nodeSize - 1;
-        const rawInsertAt = target.insertBefore ?? endPos;
+      }
 
-        const slice = doc.slice(srcFrom, srcTo);
-        tr.delete(srcFrom, srcTo);
-        const insertAt = tr.mapping.map(rawInsertAt, -1);
-        if (insertAt !== srcFrom) {
-          tr.insert(insertAt, slice.content);
-          view.dispatch(tr);
-        }
-      } else {
+      {
         const { insertBefore } = calcTopLevelDropTarget(e.clientY);
         if (insertBefore === null) {
           const slice = doc.slice(srcFrom, srcTo);
@@ -353,7 +392,7 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
       editorDom.removeEventListener('drop', onDrop, true);
       editorDom.removeEventListener('dragleave', onDragLeave, true);
     };
-  }, [editor, getTopLevelBlockAtPos, BLOCK_DRAG_MIME]);
+  }, [editor, getBlockAtPos, BLOCK_DRAG_MIME]);
 
   // Keep handle visible on the currently active block while typing/editing.
   useEffect(() => {
@@ -369,6 +408,7 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
     isDraggingRef.current = false;
     dragSrcRef.current?.domNode.removeAttribute('data-ae-dragging');
     dragSrcRef.current = null;
+    setActiveBlockDragSource(null);
     setDropIndicator(null);
     setHovered(null);
   };
@@ -379,6 +419,7 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
     if (!current) return;
 
     dragSrcRef.current = current;
+    setActiveBlockDragSource({ pos: current.pos, parentSectionPos: current.parentSectionPos });
     isDraggingRef.current = true;
 
     // Build a tidy ghost image
@@ -433,30 +474,32 @@ export function BlockHandle({ editor, assets }: { editor: Editor; assets?: Asset
   }, [editor]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  if (!hovered) return null;
+  if (!hovered && !dropIndicator && !menuOpen) return null;
 
-  const { rect } = hovered;
-  const handleTop = rect.top + rect.height / 2 - 14;
+  const rect = hovered?.rect;
+  const handleTop = rect ? rect.top + rect.height / 2 - 14 : 0;
   // Move 40px to the left so it clears any block outline/border
-  const handleLeft = Math.max(4, rect.left - 40);
+  const handleLeft = rect ? Math.max(4, rect.left - 40) : 0;
 
   return createPortal(
     <>
       {/* Grip handle */}
-      <div
-        ref={handleRef}
-        className="ae-block-handle"
-        style={{ top: handleTop, left: handleLeft }}
-        draggable
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        onClick={onHandleClick}
-        onMouseEnter={() => clearTimeout(hideTimerRef.current)}
-        onMouseLeave={() => { hideTimerRef.current = setTimeout(() => setHovered(null), 500); }}
-        title="Drag to reorder · Click for options"
-      >
-        <LuGripVertical size={15} />
-      </div>
+      {hovered && (
+        <div
+          ref={handleRef}
+          className="ae-block-handle"
+          style={{ top: handleTop, left: handleLeft }}
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onClick={onHandleClick}
+          onMouseEnter={() => clearTimeout(hideTimerRef.current)}
+          onMouseLeave={() => { hideTimerRef.current = setTimeout(() => setHovered(null), 500); }}
+          title="Drag to reorder · Click for options"
+        >
+          <LuGripVertical size={15} />
+        </div>
+      )}
 
       {/* Animated drop indicator */}
       {dropIndicator && (

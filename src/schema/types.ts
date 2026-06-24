@@ -213,7 +213,8 @@ export type FlexRowBlock = {
     gap?: 'none' | 'sm' | 'md' | 'lg';
     align?: 'start' | 'center' | 'end' | 'stretch';
     justify?: 'start' | 'center' | 'between';
-    responsive?: 'stackOnMobile' | 'scrollOnMobile' | 'preserve';
+    responsive?: 'stackOnMobile' | 'alwaysRow';
+    columnBackground?: string | null;
   };
   content: FlexColumnBlock[];
 };
@@ -223,6 +224,9 @@ export type FlexColumnBlock = {
   attrs: {
     id: string;
     width?: 'auto' | '25' | '33' | '50' | '66' | '75' | '100';
+    textAlign?: 'left' | 'center' | 'right';
+    verticalAlign?: 'start' | 'center' | 'end' | 'stretch';
+    background?: string | null;
   };
   content: Block[];
 };

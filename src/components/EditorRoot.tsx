@@ -32,6 +32,7 @@ import { BubbleToolbar } from './BubbleToolbar';
 import { BlockHandle } from './BlockHandle';
 import { SectionAddControls } from './SectionAddControls';
 import { BlankLineQuickActions } from './BlankLineQuickActions';
+import { RowAddControls } from './RowAddControls';
 
 function createDefaultSection() {
   return {
@@ -317,6 +318,7 @@ export const EditorRoot = forwardRef<EditorRootHandle, EditorRootProps>(function
       {editor && <BlockHandle editor={editor} assets={assets} />}
       {editor && <SectionAddControls editor={editor} aiConfig={canUseAi ? ai : undefined} theme={theme} assets={assets} />}
       {editor && <BlankLineQuickActions editor={editor} assets={assets} />}
+      {editor && <RowAddControls editor={editor} />}
       <EditorContent editor={editor} className="ae-editor-content" />
       <SlashCommandMenu ref={slashMenuRef} editor={editor ?? null} />
     </div>

@@ -5,7 +5,7 @@ import type { Node as PmNode } from '@tiptap/pm/model';
 import type { AiConfig, AssetConfig, EditorJsonDocument, EditorJsonFragment, EditorTheme } from '../schema/types';
 import { callAiEndpoint } from '../ai/aiClient';
 import { LuChevronDown, LuEllipsisVertical, LuLayoutTemplate, LuPlus, LuSparkles, LuTrash2, LuCopy, LuImage } from 'react-icons/lu';
-import { BLOCK_DRAG_MIME } from '../utils/dragDrop';
+import { BLOCK_DRAG_MIME, setActiveBlockDragSource } from '../utils/dragDrop';
 import { pickImageAsset } from '../utils/imagePicker';
 
 type HoveredSection = {
@@ -59,8 +59,8 @@ const TEMPLATES: TemplateItem[] = [
           type: 'flexRow',
           attrs: { id: crypto.randomUUID(), gap: 'md', responsive: 'stackOnMobile' },
           content: [
-            { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '50' }, content: [{ type: 'paragraph' }] },
-            { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: '50' }, content: [{ type: 'paragraph' }] },
+            { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
+            { type: 'flexColumn', attrs: { id: crypto.randomUUID(), width: 'auto' }, content: [{ type: 'paragraph' }] },
           ],
         },
       ]),
@@ -561,6 +561,20 @@ export function SectionAddControls({
           }}
           onDragStart={(e) => {
             if (!hoveredRef.current) return;
+            let parentSectionPos: number | null = null;
+            try {
+              const $pos = editor.state.doc.resolve(hoveredRef.current.pos);
+              for (let d = $pos.depth; d >= 1; d--) {
+                if ($pos.node(d).type.name === 'section') {
+                  parentSectionPos = $pos.before(d);
+                  break;
+                }
+              }
+            } catch {
+              parentSectionPos = null;
+            }
+
+            setActiveBlockDragSource({ pos: hoveredRef.current.pos, parentSectionPos });
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData(BLOCK_DRAG_MIME, String(hoveredRef.current.pos));
             e.dataTransfer.setData('text/plain', '');
@@ -568,6 +582,7 @@ export function SectionAddControls({
             if (dom instanceof Element) dom.setAttribute('data-ae-dragging', 'true');
           }}
           onDragEnd={() => {
+            setActiveBlockDragSource(null);
             if (!hoveredRef.current) return;
             const dom = editor.view.nodeDOM(hoveredRef.current.pos);
             if (dom instanceof Element) dom.removeAttribute('data-ae-dragging');

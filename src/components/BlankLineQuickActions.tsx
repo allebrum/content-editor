@@ -110,7 +110,7 @@ export function BlankLineQuickActions({ editor, assets }: { editor: Editor; asse
         content: [
           {
             type: 'flexColumn',
-            attrs: { id: crypto.randomUUID(), width: '50' },
+            attrs: { id: crypto.randomUUID(), width: 'auto' },
             content: [
               { type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'Column 1' }] },
               { type: 'paragraph', content: [{ type: 'text', text: 'Add details...' }] },
@@ -118,7 +118,7 @@ export function BlankLineQuickActions({ editor, assets }: { editor: Editor; asse
           },
           {
             type: 'flexColumn',
-            attrs: { id: crypto.randomUUID(), width: '50' },
+            attrs: { id: crypto.randomUUID(), width: 'auto' },
             content: [
               { type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'Column 2' }] },
               { type: 'paragraph', content: [{ type: 'text', text: 'Add details...' }] },

@@ -143,14 +143,31 @@ function blockToHtml(block: Block): string {
       return `<section class="ae-section" data-type="section" data-card-width="${escapeAttr(String(cardWidth ?? 'md'))}" data-content-align="${escapeAttr(String(contentAlign ?? 'top'))}" data-full-bleed="${fullBleed === false ? 'false' : 'true'}"${outerStyle ? ` style="${escapeAttr(outerStyle)}"` : ''}><div class="${escapeAttr(innerCls)}"${innerStyle ? ` style="${escapeAttr(innerStyle)}"` : ''}>${inner()}</div></section>`;
     }
     case 'flexRow': {
-      const { gap, responsive } = b.attrs ?? {};
-      const cls = ['ae-row', gap ? `ae-row--gap-${gap}` : '', responsive === 'stackOnMobile' ? 'ae-row--stack-mobile' : ''].filter(Boolean).join(' ');
-      return `<div class="${cls}">${inner()}</div>`;
+      const { gap, responsive, align, justify, columnBackground } = b.attrs ?? {};
+      const cls = [
+        'ae-row',
+        gap ? `ae-row--gap-${gap}` : '',
+        align ? `ae-row--align-${align}` : '',
+        justify ? `ae-row--justify-${justify}` : '',
+        responsive === 'stackOnMobile' ? 'ae-row--stack-mobile' : '',
+      ].filter(Boolean).join(' ');
+      const rowBgAttr = typeof columnBackground === 'string' && columnBackground
+        ? ` data-row-col-bg="${escapeAttr(columnBackground)}" style="--ae-row-col-bg:${escapeAttr(columnBackground)}"`
+        : '';
+      return `<div class="${cls}"${rowBgAttr}>${inner()}</div>`;
     }
     case 'flexColumn': {
-      const { width } = b.attrs ?? {};
-      const cls = ['ae-col', width && width !== 'auto' ? `ae-col--${width}` : 'ae-col--auto'].filter(Boolean).join(' ');
-      return `<div class="${cls}">${inner()}</div>`;
+      const { width, textAlign, verticalAlign, background } = b.attrs ?? {};
+      const cls = [
+        'ae-col',
+        width && width !== 'auto' ? `ae-col--${width}` : 'ae-col--auto',
+        textAlign ? `ae-col--text-${textAlign}` : '',
+        verticalAlign ? `ae-col--valign-${verticalAlign}` : '',
+      ].filter(Boolean).join(' ');
+      const colBgAttr = typeof background === 'string' && background
+        ? ` data-col-bg="${escapeAttr(background)}" style="--ae-col-bg:${escapeAttr(background)}"`
+        : '';
+      return `<div class="${cls}"${colBgAttr}>${inner()}</div>`;
     }
     case 'hero': {
       const { variant } = b.attrs ?? {};

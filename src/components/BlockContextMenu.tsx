@@ -5,7 +5,7 @@ import type { Node as PmNode } from '@tiptap/pm/model';
 import {
   LuType, LuHeading1, LuHeading2, LuHeading3, LuHeading4,
   LuQuote, LuBell, LuList, LuListOrdered, LuClipboardCheck,
-  LuTrash2, LuCopy,
+  LuTrash2, LuCopy, LuPlus,
   LuColumns2, LuColumns3,
   LuAlignStartVertical, LuAlignCenterVertical, LuAlignEndVertical, LuMoveVertical,
   LuSmartphone, LuMonitor,
@@ -92,6 +92,12 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
     editor.view.dispatch(tr);
   }, [editor, pos, node.attrs]);
 
+  const setAttrsAtPos = useCallback((targetPos: number, targetNode: PmNode, attrs: Record<string, unknown>) => {
+    const { tr } = editor.state;
+    tr.setNodeMarkup(targetPos, undefined, { ...targetNode.attrs, ...attrs });
+    editor.view.dispatch(tr);
+  }, [editor]);
+
   // ── Build section list ─────────────────────────────────────────────────────
   const sections: MenuSection[] = [];
   const nodeType = node.type.name;
@@ -99,7 +105,9 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
   const TEXT_TYPES = ['paragraph', 'heading', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'taskList'];
   const isText = TEXT_TYPES.includes(nodeType);
   const isLayout = nodeType === 'flexRow';
+  const isColumn = nodeType === 'flexColumn';
   const isSection = nodeType === 'section';
+  const rowColumnColors = ['#ffffff', '#f8fafc', '#eff6ff', '#fef3c7', '#ecfeff', '#fce7f3'];
 
   if (isText) {
     sections.push({
@@ -171,26 +179,58 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
 
   if (isLayout) {
     const colCount = node.childCount;
+    const selected = getSelectedColumnInRow(editor, pos, node);
+    const widthSignature = getRowWidthSignature(node);
     sections.push({
       heading: 'Columns',
       items: [
         {
-          label: '1 column',
-          icon: LuLayoutTemplate,
-          active: colCount === 1,
-          action: () => exec(() => adjustColumns(editor, pos, node, 1)),
+          label: '2 columns - equal',
+          icon: LuColumns2,
+          active: colCount === 2 && widthSignature === 'auto,auto',
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['auto', 'auto'])),
         },
         {
-          label: '2 columns',
+          label: '2 columns - left',
           icon: LuColumns2,
-          active: colCount === 2,
-          action: () => exec(() => adjustColumns(editor, pos, node, 2)),
+          active: colCount === 2 && widthSignature === '66,33',
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['66', '33'])),
+        },
+        {
+          label: '2 columns - right',
+          icon: LuColumns2,
+          active: colCount === 2 && widthSignature === '33,66',
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['33', '66'])),
         },
         {
           label: '3 columns',
           icon: LuColumns3,
           active: colCount === 3,
-          action: () => exec(() => adjustColumns(editor, pos, node, 3)),
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['auto', 'auto', 'auto'])),
+        },
+        {
+          label: '4 columns',
+          icon: LuColumns3,
+          active: colCount === 4,
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['auto', 'auto', 'auto', 'auto'])),
+        },
+        {
+          label: '5 columns',
+          icon: LuColumns3,
+          active: colCount === 5,
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['auto', 'auto', 'auto', 'auto', 'auto'])),
+        },
+        {
+          label: '6 columns',
+          icon: LuColumns3,
+          active: colCount === 6,
+          action: () => exec(() => applyRowPreset(editor, pos, node, ['auto', 'auto', 'auto', 'auto', 'auto', 'auto'])),
+        },
+        {
+          label: 'Add column',
+          icon: LuPlus,
+          active: false,
+          action: () => exec(() => insertColumn(editor, pos, node, node.childCount)),
         },
       ],
     });
@@ -226,6 +266,30 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
     });
 
     sections.push({
+      heading: 'Horizontal distribution',
+      items: [
+        {
+          label: 'Start',
+          icon: LuAlignStartVertical,
+          active: (node.attrs.justify ?? 'start') === 'start',
+          action: () => setAttr({ justify: 'start' }),
+        },
+        {
+          label: 'Center',
+          icon: LuAlignCenterVertical,
+          active: node.attrs.justify === 'center',
+          action: () => setAttr({ justify: 'center' }),
+        },
+        {
+          label: 'Space between',
+          icon: LuMoveVertical,
+          active: node.attrs.justify === 'between',
+          action: () => setAttr({ justify: 'between' }),
+        },
+      ],
+    });
+
+    sections.push({
       heading: 'Mobile',
       items: [
         {
@@ -242,6 +306,203 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
         },
       ],
     });
+
+    sections.push({
+      heading: 'Column colors (all)',
+      items: [
+        ...rowColumnColors.map((color) => ({
+          label: color === '#ffffff' ? 'White' : color,
+          icon: LuLayoutTemplate,
+          active: (node.attrs.columnBackground ?? null) === color,
+          action: () => setAttr({ columnBackground: color }),
+        })),
+        {
+          label: 'Clear color',
+          icon: LuTrash2,
+          active: node.attrs.columnBackground == null,
+          action: () => setAttr({ columnBackground: null }),
+        },
+      ],
+    });
+
+    if (selected) {
+      sections.push({
+        heading: `Selected column (${selected.index + 1})`,
+        items: [
+          {
+            label: 'Auto width',
+            icon: LuLayoutTemplate,
+            active: (selected.node.attrs.width ?? 'auto') === 'auto',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: 'auto' }),
+          },
+          {
+            label: '25%',
+            icon: LuColumns2,
+            active: selected.node.attrs.width === '25',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '25' }),
+          },
+          {
+            label: '33%',
+            icon: LuColumns3,
+            active: selected.node.attrs.width === '33',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '33' }),
+          },
+          {
+            label: '50%',
+            icon: LuColumns2,
+            active: selected.node.attrs.width === '50',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '50' }),
+          },
+          {
+            label: '66%',
+            icon: LuColumns3,
+            active: selected.node.attrs.width === '66',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '66' }),
+          },
+          {
+            label: '75%',
+            icon: LuColumns2,
+            active: selected.node.attrs.width === '75',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '75' }),
+          },
+          {
+            label: '100%',
+            icon: LuLayoutTemplate,
+            active: selected.node.attrs.width === '100',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { width: '100' }),
+          },
+          {
+            label: 'Text left',
+            icon: LuAlignStartVertical,
+            active: (selected.node.attrs.textAlign ?? 'left') === 'left',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { textAlign: 'left' }),
+          },
+          {
+            label: 'Text center',
+            icon: LuAlignCenterVertical,
+            active: selected.node.attrs.textAlign === 'center',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { textAlign: 'center' }),
+          },
+          {
+            label: 'Text right',
+            icon: LuAlignEndVertical,
+            active: selected.node.attrs.textAlign === 'right',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { textAlign: 'right' }),
+          },
+          {
+            label: 'Top align',
+            icon: LuAlignStartVertical,
+            active: (selected.node.attrs.verticalAlign ?? 'stretch') === 'start',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { verticalAlign: 'start' }),
+          },
+          {
+            label: 'Middle align',
+            icon: LuAlignCenterVertical,
+            active: selected.node.attrs.verticalAlign === 'center',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { verticalAlign: 'center' }),
+          },
+          {
+            label: 'Bottom align',
+            icon: LuAlignEndVertical,
+            active: selected.node.attrs.verticalAlign === 'end',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { verticalAlign: 'end' }),
+          },
+          {
+            label: 'Stretch align',
+            icon: LuMoveVertical,
+            active: selected.node.attrs.verticalAlign === 'stretch',
+            action: () => setAttrsAtPos(selected.pos, selected.node, { verticalAlign: 'stretch' }),
+          },
+          ...rowColumnColors.map((color) => ({
+            label: color === '#ffffff' ? 'Column white' : `Column ${color}`,
+            icon: LuLayoutTemplate,
+            active: (selected.node.attrs.background ?? null) === color,
+            action: () => setAttrsAtPos(selected.pos, selected.node, { background: color }),
+          })),
+          {
+            label: 'Clear column color',
+            icon: LuTrash2,
+            active: selected.node.attrs.background == null,
+            action: () => setAttrsAtPos(selected.pos, selected.node, { background: null }),
+          },
+          {
+            label: 'Duplicate column',
+            icon: LuCopy,
+            active: false,
+            action: () => duplicateColumn(editor, pos, node, selected.index),
+          },
+          {
+            label: 'Add column before',
+            icon: LuPlus,
+            active: false,
+            action: () => insertColumn(editor, pos, node, selected.index),
+          },
+          {
+            label: 'Add column after',
+            icon: LuPlus,
+            active: false,
+            action: () => insertColumn(editor, pos, node, selected.index + 1),
+          },
+          {
+            label: 'Delete column',
+            icon: LuTrash2,
+            danger: true,
+            active: false,
+            action: () => deleteColumn(editor, pos, node, selected.index),
+          },
+        ],
+      });
+    }
+  }
+
+  if (isColumn) {
+    const ctx = getColumnContext(editor, pos);
+    if (ctx) {
+      sections.push({
+        heading: 'Column',
+        items: [
+          {
+            label: 'Auto width',
+            icon: LuLayoutTemplate,
+            active: (node.attrs.width ?? 'auto') === 'auto',
+            action: () => setAttr({ width: 'auto' }),
+          },
+          {
+            label: '50%',
+            icon: LuColumns2,
+            active: node.attrs.width === '50',
+            action: () => setAttr({ width: '50' }),
+          },
+          {
+            label: 'Text center',
+            icon: LuAlignCenterVertical,
+            active: node.attrs.textAlign === 'center',
+            action: () => setAttr({ textAlign: 'center' }),
+          },
+          {
+            label: 'Duplicate column',
+            icon: LuCopy,
+            action: () => duplicateColumn(editor, ctx.rowPos, ctx.rowNode, ctx.index),
+          },
+          {
+            label: 'Add column before',
+            icon: LuPlus,
+            action: () => insertColumn(editor, ctx.rowPos, ctx.rowNode, ctx.index),
+          },
+          {
+            label: 'Add column after',
+            icon: LuPlus,
+            action: () => insertColumn(editor, ctx.rowPos, ctx.rowNode, ctx.index + 1),
+          },
+          {
+            label: 'Delete column',
+            icon: LuTrash2,
+            danger: true,
+            action: () => deleteColumn(editor, ctx.rowPos, ctx.rowNode, ctx.index),
+          },
+        ],
+      });
+    }
   }
 
   if (isSection) {
@@ -409,19 +670,84 @@ export function BlockContextMenu({ editor, node, pos, x, y, assets, onClose }: B
   );
 }
 
+function getRowWidthSignature(node: PmNode): string {
+  return Array.from({ length: node.childCount }, (_, i) => String(node.child(i).attrs.width ?? 'auto')).join(',');
+}
+
+type RowColumnInfo = {
+  rowPos: number;
+  rowNode: PmNode;
+  pos: number;
+  node: PmNode;
+  index: number;
+};
+
+function getSelectedColumnInRow(editor: Editor, rowPos: number, rowNode: PmNode): RowColumnInfo | null {
+  const selectionPos = editor.state.selection.from;
+  let colPos = rowPos + 1;
+  let fallback: RowColumnInfo | null = null;
+  for (let i = 0; i < rowNode.childCount; i++) {
+    const colNode = rowNode.child(i);
+    const from = colPos;
+    const to = colPos + colNode.nodeSize;
+    const current: RowColumnInfo = { rowPos, rowNode, pos: colPos, node: colNode, index: i };
+    if (!fallback) fallback = current;
+    if (selectionPos >= from && selectionPos <= to) return current;
+    colPos = to;
+  }
+  return fallback;
+}
+
+function getColumnContext(editor: Editor, colPos: number): { rowPos: number; rowNode: PmNode; index: number } | null {
+  try {
+    const $pos = editor.state.doc.resolve(colPos);
+    for (let d = $pos.depth; d >= 1; d--) {
+      if ($pos.node(d).type.name !== 'flexColumn') continue;
+      const rowDepth = d - 1;
+      if (rowDepth < 1 || $pos.node(rowDepth).type.name !== 'flexRow') continue;
+      const rowPos = $pos.before(rowDepth);
+      const rowNode = editor.state.doc.nodeAt(rowPos);
+      if (!rowNode) return null;
+      let offset = rowPos + 1;
+      for (let i = 0; i < rowNode.childCount; i++) {
+        if (offset === $pos.before(d)) return { rowPos, rowNode, index: i };
+        offset += rowNode.child(i).nodeSize;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function applyRowPreset(editor: Editor, pos: number, node: PmNode, widths: Array<'auto' | '25' | '33' | '50' | '66' | '75' | '100'>) {
+  adjustColumns(editor, pos, node, widths.length);
+  const updated = editor.state.doc.nodeAt(pos);
+  if (!updated || updated.type.name !== 'flexRow') return;
+  const { tr } = editor.state;
+  let colPos = pos + 1;
+  for (let i = 0; i < updated.childCount; i++) {
+    const colNode = updated.child(i);
+    tr.setNodeMarkup(colPos, undefined, { ...colNode.attrs, width: widths[i] ?? 'auto' });
+    colPos += colNode.nodeSize;
+  }
+  editor.view.dispatch(tr);
+}
+
 // ── Adjust column count of a flexRow ─────────────────────────────────────────
 function adjustColumns(editor: Editor, pos: number, node: PmNode, targetCount: number) {
+  const boundedTarget = Math.max(1, Math.min(6, targetCount));
   const { tr, schema } = editor.state;
   const colType = schema.nodes.flexColumn;
   if (!colType) return;
 
   const currentCount = node.childCount;
-  if (currentCount === targetCount) return;
+  if (currentCount === boundedTarget) return;
 
-  if (targetCount > currentCount) {
+  if (boundedTarget > currentCount) {
     // Add columns before the closing of flexRow (pos + nodeSize - 1)
-    const toAdd = targetCount - currentCount;
-    const newCol = colType.create({}, schema.nodes.paragraph.create());
+    const toAdd = boundedTarget - currentCount;
+    const newCol = colType.create({ id: crypto.randomUUID(), width: 'auto' }, schema.nodes.paragraph.create());
     const insertAt = pos + node.nodeSize - 1;
     for (let i = 0; i < toAdd; i++) {
       tr.insert(insertAt + i * newCol.nodeSize, newCol);
@@ -434,10 +760,48 @@ function adjustColumns(editor: Editor, pos: number, node: PmNode, targetCount: n
       colStarts.push(offset);
       offset += node.child(i).nodeSize;
     }
-    for (let i = currentCount - 1; i >= targetCount; i--) {
+    for (let i = currentCount - 1; i >= boundedTarget; i--) {
       tr.delete(colStarts[i], colStarts[i] + node.child(i).nodeSize);
     }
   }
 
+  editor.view.dispatch(tr);
+}
+
+function insertColumn(editor: Editor, rowPos: number, rowNode: PmNode, index: number) {
+  if (rowNode.childCount >= 6) return;
+  const { tr, schema } = editor.state;
+  const colType = schema.nodes.flexColumn;
+  const paraType = schema.nodes.paragraph;
+  if (!colType || !paraType) return;
+  let insertAt = rowPos + 1;
+  for (let i = 0; i < Math.max(0, Math.min(index, rowNode.childCount)); i++) {
+    insertAt += rowNode.child(i).nodeSize;
+  }
+  const newCol = colType.create({ id: crypto.randomUUID(), width: 'auto' }, paraType.create());
+  tr.insert(insertAt, newCol);
+  editor.view.dispatch(tr);
+}
+
+function duplicateColumn(editor: Editor, rowPos: number, rowNode: PmNode, index: number) {
+  if (rowNode.childCount >= 6 || index < 0 || index >= rowNode.childCount) return;
+  const { tr } = editor.state;
+  let insertAt = rowPos + 1;
+  for (let i = 0; i <= index; i++) {
+    insertAt += rowNode.child(i).nodeSize;
+  }
+  tr.insert(insertAt, rowNode.child(index));
+  editor.view.dispatch(tr);
+}
+
+function deleteColumn(editor: Editor, rowPos: number, rowNode: PmNode, index: number) {
+  if (rowNode.childCount <= 1 || index < 0 || index >= rowNode.childCount) return;
+  const { tr } = editor.state;
+  let colStart = rowPos + 1;
+  for (let i = 0; i < index; i++) {
+    colStart += rowNode.child(i).nodeSize;
+  }
+  const colSize = rowNode.child(index).nodeSize;
+  tr.delete(colStart, colStart + colSize);
   editor.view.dispatch(tr);
 }
