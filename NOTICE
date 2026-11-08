@@ -1,0 +1,25 @@
+@allebrum/page-editor
+Copyright (c) Allebrum contributors
+
+This package contains original Allebrum work and substantial code derived from
+the Hoppa notes editor in:
+
+  Repository: https://github.com/allebrum/company-portal
+  Paths: apps/web/src/components/space/notes/* ,
+         apps/web/src/components/space/NotesTab.tsx (extracted canvas pieces),
+         apps/web/src/components/space/SlashMenu.tsx,
+         apps/web/src/components/space/NotesShortcutsHelp.tsx,
+         apps/web/src/components/space/useBlockSelection.tsx
+  Upstream commit: dcea05ee655308385581660b1e38ac6213249791
+  Upstream license: GNU Affero General Public License v3.0 (see LICENSE)
+
+Hoppa-specific product integrations (to-dos, goals, timers, item links, embed
+cards, mentions as product entities, uploads, sockets, React Query hooks, auth,
+and localStorage autosave inside the UI) were not copied into the default
+editor. DOM-free helpers and UI behavior that were copied retain their AGPL
+terms. This package does not assert that Allebrum ownership erases those terms.
+
+Version 0.1.x of this package was a separate TipTap page-builder implementation
+distributed as MIT without a LICENSE file in the repository. That implementation
+has been replaced. Combining the remaining Allebrum-authored packaging with
+AGPL-derived notes code requires distributing the combined work under AGPL-3.0.

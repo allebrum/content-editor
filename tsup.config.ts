@@ -4,7 +4,7 @@ export default defineConfig([
   {
     entry: {
       index: 'src/index.ts',
-      renderer: 'src/renderer.ts',
+      renderer: 'src/renderer.tsx',
       server: 'src/server.ts',
     },
     format: ['esm', 'cjs'],
@@ -12,7 +12,7 @@ export default defineConfig([
     splitting: true,
     sourcemap: true,
     clean: true,
-    external: ['react', 'react-dom', 'react-icons', /^react-icons\//],
+    external: ['react', 'react-dom', 'lucide-react', /^lucide-react\//],
     esbuildOptions(options) {
       options.jsx = 'automatic';
     },
