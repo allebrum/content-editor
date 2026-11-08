@@ -28,6 +28,7 @@ export type SlashOpen = { rect: { x: number; y: number; top: number }; query: st
 
 export type EditorApi = {
   placeholder: string;
+  ariaLabel?: string;
   readOnly: boolean;
   blockCount: number;
   remove: (id: string, opts?: { undo?: boolean; focus?: 'prev' | 'next' | 'none' }) => void;
@@ -491,7 +492,7 @@ function EditableBlock({
         role="textbox"
         aria-multiline="true"
         aria-readonly={api.readOnly || undefined}
-        aria-label={placeholderFor(block, true, api.placeholder) || 'Text'}
+        aria-label={api.ariaLabel || placeholderFor(block, true, api.placeholder) || 'Text'}
         data-block-id={block.id}
         data-empty={isEmptyContent(content) ? 'true' : 'false'}
         data-placeholder={placeholderFor(block, focused, api.placeholder)}

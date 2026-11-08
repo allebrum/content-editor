@@ -31,6 +31,8 @@ export type BlockEditorProps = {
   readOnly?: boolean;
   disabled?: boolean;
   placeholder?: string;
+  /** Used as the accessible name for editable blocks (e.g. "Project notes"). */
+  ariaLabel?: string;
   adapters?: HostAdapters;
   extraCommands?: ExtraSlashCommand[];
   className?: string;
@@ -74,6 +76,7 @@ export function BlockEditor({
   readOnly = false,
   disabled = false,
   placeholder = "Press '/' for commands",
+  ariaLabel,
   adapters,
   extraCommands,
   className,
@@ -270,6 +273,7 @@ export function BlockEditor({
 
   const editorApi: EditorApi = {
     placeholder,
+    ariaLabel,
     readOnly: locked,
     blockCount: blocks.length,
     remove: removeBlock,
