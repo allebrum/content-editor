@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
-  blockId, emptyText, isEditable, reducer,
+  blockId, emptyText, isEditable, isEmptyContent, reducer,
 } from '../blocks';
 import { extraCommandsFromAdapters, SLASH_COMMANDS, type CommandDef } from '../commands';
 import { placeCaretNearX, setCaret } from '../dom';
@@ -271,11 +271,13 @@ export function BlockEditor({
     return true;
   };
 
+  const docEmpty = blocks.length > 0 && blocks.every((b) => isEditable(b) && isEmptyContent(b.content));
   const editorApi: EditorApi = {
     placeholder,
     ariaLabel,
     readOnly: locked,
     blockCount: blocks.length,
+    idlePlaceholderBlockId: docEmpty ? (blocks[0]?.id ?? null) : null,
     remove: removeBlock,
     duplicate: (id) => {
       const b = blocksRef.current.find((x) => x.id === id);
@@ -407,9 +409,14 @@ export function BlockEditor({
       </div>
       {blockSel.sink}
       {!locked && (
-        <button type="button" onClick={focusOrAppendLine} className="pe-append" contentEditable={false}>
-          Click to write, or press <kbd>/</kbd> for commands…
-        </button>
+        <button
+          type="button"
+          onClick={focusOrAppendLine}
+          className="pe-append"
+          contentEditable={false}
+          aria-label="Continue writing"
+          data-testid="page-editor-append"
+        />
       )}
       {slash && !locked && (
         <SlashMenu
