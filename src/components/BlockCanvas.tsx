@@ -31,6 +31,8 @@ export type EditorApi = {
   ariaLabel?: string;
   readOnly: boolean;
   blockCount: number;
+  /** First block id when every editable block is empty — one idle placeholder. */
+  idlePlaceholderBlockId: string | null;
   remove: (id: string, opts?: { undo?: boolean; focus?: 'prev' | 'next' | 'none' }) => void;
   duplicate: (id: string) => void;
   turnInto: (id: string, type: BlockType) => void;
@@ -495,7 +497,7 @@ function EditableBlock({
         aria-label={api.ariaLabel || placeholderFor(block, true, api.placeholder) || 'Text'}
         data-block-id={block.id}
         data-empty={isEmptyContent(content) ? 'true' : 'false'}
-        data-placeholder={placeholderFor(block, focused, api.placeholder)}
+        data-placeholder={placeholderFor(block, focused, api.placeholder, api.idlePlaceholderBlockId === block.id)}
         data-testid={`block-${block.id}`}
         onInput={handleInput}
         onKeyDown={onKeyDown}
@@ -519,7 +521,8 @@ function EditableBlock({
   );
 }
 
-function placeholderFor(block: Block, focused: boolean, fallback: string): string {
+function placeholderFor(block: Block, focused: boolean, fallback: string, idle = false): string {
+  if (!focused && !idle) return '';
   switch (block.type) {
     case 'h1': return 'Heading 1';
     case 'h2': return 'Heading 2';
@@ -529,6 +532,6 @@ function placeholderFor(block: Block, focused: boolean, fallback: string): strin
     case 'bullet': return 'List item';
     case 'numbered': return 'List item';
     case 'checkbox': return 'Task';
-    default: return focused ? (fallback || "Press '/' for commands") : fallback;
+    default: return fallback || "Press '/' for commands";
   }
 }

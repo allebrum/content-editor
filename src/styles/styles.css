@@ -54,9 +54,8 @@
 .pe-divider-wrap { outline: none; }
 .pe-divider-wrap:focus { box-shadow: 0 0 0 2px #bfdbfe; border-radius: 8px; }
 .pe-divider { border: 0; border-top: 1px solid var(--pe-border); margin: 0.75rem 0; }
-.pe-append { width: 100%; text-align: left; font-size: 14px; color: #6b7280; background: transparent; border: 0; padding: 0.75rem 0.5rem; border-radius: 8px; cursor: pointer; }
-.pe-append:hover { background: #f9fafb; color: #374151; }
-.pe-append kbd { font-family: ui-monospace, monospace; font-size: 11px; background: #f3f4f6; padding: 0 4px; border-radius: 3px; }
+.pe-append { display: block; width: 100%; min-height: 8rem; background: transparent; border: 0; padding: 0; cursor: text; }
+.pe-append:hover { background: transparent; }
 .pe-selecting *::selection { background: transparent; }
 .pe-popover { position: fixed; z-index: 320; background: #fff; border: 1px solid var(--pe-border); box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12); border-radius: 10px; overflow: hidden; }
 .pe-menu { padding: 4px 0; }
