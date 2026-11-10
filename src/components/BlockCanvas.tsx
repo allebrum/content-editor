@@ -21,7 +21,10 @@ import {
   readText, setCaret, writeText,
 } from '../dom';
 import { selectAllEscalates, shiftArrowLeavesBlock } from '../selection';
-import type { Block, BlockType } from '../types';
+import type { AnyBlock, Block, BlockType, VideoBlock, VideoProvider } from '../types';
+import type { InlineMark } from '../inline';
+import { parseVideoUrl, providerLabel, sanitizeImageSrc } from '../media';
+import { VideoEmbed } from '../renderer';
 import { Popover } from './Popover';
 
 export type SlashOpen = { rect: { x: number; y: number; top: number }; query: string; tokenStart: number };
@@ -53,7 +56,26 @@ export type EditorApi = {
   dragOver: (id: string, e: React.DragEvent) => void;
   drop: (id: string, e: React.DragEvent) => void;
   dragEnd: () => void;
+  /** True for version 2 documents: inline marks and media blocks are enabled. */
+  inlineMarks: boolean;
+  applyMark: (id: string, mark: InlineMark) => void;
+  patchMedia: (id: string, patch: Partial<AnyBlock>) => void;
+  uploads: Record<string, PendingUpload>;
+  pickImage: (id: string) => void;
+  retryUpload: (id: string) => void;
+  cancelUpload: (id: string) => void;
+  canUploadImages: boolean;
+  videoProviders: readonly VideoProvider[];
 };
+
+export type PendingUpload = { fileName: string; progress: number; error?: string };
+
+export const IMAGE_WIDTH_OPTIONS: readonly { value: number | null; label: string }[] = [
+  { value: null, label: 'Full width' },
+  { value: 720, label: 'Large (720px)' },
+  { value: 480, label: 'Medium (480px)' },
+  { value: 320, label: 'Small (320px)' },
+];
 
 function gutterMod(type: BlockType): string {
   return `pe-gutter--${type}`;
@@ -131,6 +153,10 @@ export function BlockRow({
 
       {editable ? (
         <EditableBlock block={block} index={index} blocks={blocks} api={api} slashOpen={slashOpen} />
+      ) : (block.type as string) === 'image' ? (
+        <ImageCard block={block as unknown as AnyBlock} api={api} />
+      ) : (block.type as string) === 'video' ? (
+        <VideoCard block={block as unknown as AnyBlock} api={api} />
       ) : (
         <DividerShell block={block} api={api} />
       )}
@@ -199,8 +225,8 @@ function BlockMenu({
   );
 }
 
-function DividerShell({ block, api }: { block: Block; api: EditorApi }) {
-  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+function cardKeyHandler(block: { id: string }, api: EditorApi) {
+  return (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     const x = e.currentTarget.getBoundingClientRect().left;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
@@ -235,15 +261,193 @@ function DividerShell({ block, api }: { block: Block; api: EditorApi }) {
         return;
     }
   };
+}
+
+function DividerShell({ block, api }: { block: Block; api: EditorApi }) {
   return (
     <div
       data-card-id={block.id}
       tabIndex={-1}
-      onKeyDown={onKeyDown}
+      onKeyDown={cardKeyHandler(block, api)}
       contentEditable={false}
       className="pe-divider-wrap"
     >
       <hr className="pe-divider" />
+    </div>
+  );
+}
+
+function ImageCard({ block, api }: { block: AnyBlock; api: EditorApi }) {
+  const upload = api.uploads[block.id];
+  const src = sanitizeImageSrc(block.src);
+  const pct = upload ? Math.round(Math.max(0, Math.min(1, upload.progress)) * 100) : 0;
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <div
+      data-card-id={block.id}
+      tabIndex={-1}
+      onKeyDown={cardKeyHandler(block, api)}
+      contentEditable={false}
+      className="pe-media pe-media-image"
+      data-testid={`image-${block.id}`}
+    >
+      {src ? (
+        <figure className="pe-image" style={block.width ? { maxWidth: block.width } : undefined}>
+          <img src={src} alt={block.alt ?? ''} className="pe-media-img" />
+          {api.readOnly && block.caption ? <figcaption>{block.caption}</figcaption> : null}
+        </figure>
+      ) : upload ? (
+        <div className="pe-upload" role="status">
+          <div
+            className="pe-progress"
+            role="progressbar"
+            aria-label={`Uploading ${upload.fileName}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+          >
+            <div className="pe-progress-bar" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="pe-upload-label">
+            {upload.error ? upload.error : `Uploading ${upload.fileName}… ${pct}%`}
+          </span>
+          {!api.readOnly && (
+            <span className="pe-upload-actions">
+              {upload.error && (
+                <button type="button" className="pe-btn" onClick={() => api.retryUpload(block.id)}>Retry</button>
+              )}
+              <button type="button" className="pe-btn" onClick={() => api.cancelUpload(block.id)}>
+                {upload.error ? 'Remove' : 'Cancel'}
+              </button>
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="pe-media-empty">
+          {api.canUploadImages && !api.readOnly ? (
+            <button type="button" className="pe-btn" onClick={() => api.pickImage(block.id)}>Choose an image…</button>
+          ) : (
+            <span>Image unavailable</span>
+          )}
+        </div>
+      )}
+      {src && !api.readOnly && (
+        <div className="pe-media-fields" onKeyDown={stop}>
+          <label className="pe-field">
+            <span>Alt text</span>
+            <input
+              type="text"
+              value={block.alt ?? ''}
+              maxLength={500}
+              placeholder="Describe the image for people who can't see it"
+              onChange={(e) => api.patchMedia(block.id, { alt: e.target.value })}
+            />
+          </label>
+          {!block.alt && <p className="pe-media-warn">Add alt text, or leave empty only if the image is decorative.</p>}
+          <label className="pe-field">
+            <span>Caption</span>
+            <input
+              type="text"
+              value={block.caption ?? ''}
+              maxLength={1000}
+              placeholder="Optional caption"
+              onChange={(e) => api.patchMedia(block.id, { caption: e.target.value || undefined })}
+            />
+          </label>
+          <label className="pe-field pe-field-inline">
+            <span>Width</span>
+            <select
+              value={block.width == null ? '' : String(block.width)}
+              onChange={(e) => api.patchMedia(block.id, { width: e.target.value ? Number(e.target.value) : undefined })}
+            >
+              {IMAGE_WIDTH_OPTIONS.map((o) => (
+                <option key={o.label} value={o.value == null ? '' : String(o.value)}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          {api.canUploadImages && (
+            <button type="button" className="pe-btn" onClick={() => api.pickImage(block.id)}>Replace image</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoCard({ block, api }: { block: AnyBlock; api: EditorApi }) {
+  const [url, setUrl] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const names = api.videoProviders.map(providerLabel).join(' or ');
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  const embed = () => {
+    const parsed = parseVideoUrl(url, api.videoProviders);
+    if (!parsed) {
+      setError(`Paste a ${names} video link.`);
+      return;
+    }
+    setError(null);
+    api.patchMedia(block.id, { provider: parsed.provider, videoId: parsed.videoId, hash: parsed.hash });
+  };
+  const ready = !!(block.provider && block.videoId);
+  return (
+    <div
+      data-card-id={block.id}
+      tabIndex={-1}
+      onKeyDown={cardKeyHandler(block, api)}
+      contentEditable={false}
+      className="pe-media pe-media-video"
+      data-testid={`video-${block.id}`}
+    >
+      {ready ? (
+        <VideoEmbed block={block as unknown as VideoBlock} />
+      ) : api.readOnly ? (
+        <div className="pe-media-empty">Video not set</div>
+      ) : (
+        <form
+          className="pe-video-form"
+          onKeyDown={stop}
+          onSubmit={(e) => {
+            e.preventDefault();
+            embed();
+          }}
+        >
+          <input
+            type="url"
+            value={url}
+            autoFocus
+            aria-label={`${names} link`}
+            placeholder={`Paste a ${names} link`}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <button type="submit" className="pe-btn">Embed</button>
+          <button type="button" className="pe-btn" onClick={() => api.remove(block.id)}>Cancel</button>
+          {error && <p className="pe-media-warn" role="alert">{error}</p>}
+        </form>
+      )}
+      {ready && !api.readOnly && (
+        <div className="pe-media-fields" onKeyDown={stop}>
+          <label className="pe-field">
+            <span>Title</span>
+            <input
+              type="text"
+              value={block.title ?? ''}
+              maxLength={500}
+              placeholder="Describes the video for screen readers"
+              onChange={(e) => api.patchMedia(block.id, { title: e.target.value || undefined })}
+            />
+          </label>
+          <label className="pe-field">
+            <span>Caption</span>
+            <input
+              type="text"
+              value={block.caption ?? ''}
+              maxLength={1000}
+              placeholder="Optional caption"
+              onChange={(e) => api.patchMedia(block.id, { caption: e.target.value || undefined })}
+            />
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -372,6 +576,16 @@ function EditableBlock({
     }
 
     if (api.readOnly) return;
+
+    if (api.inlineMarks && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      const k = e.key.toLowerCase();
+      const mark: InlineMark | null = k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'e' ? 'code' : k === 'k' ? 'link' : null;
+      if (mark) {
+        e.preventDefault();
+        api.applyMark(block.id, mark);
+        return;
+      }
+    }
 
     switch (e.key) {
       case 'Enter': {

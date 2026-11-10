@@ -1,4 +1,42 @@
-# Migration from @allebrum/page-editor 0.1.x
+# Migration notes
+
+## 1.0.x → 1.1.0 (additive, no breaking changes)
+
+1.1.0 adds **document version 2** (image and video blocks, inline marks).
+It is opt-in. If you do nothing:
+
+- `DOCUMENT_VERSION` is still `1`; `EditorDocument` and `Block` types are unchanged.
+- `parseDocument()` still accepts only v1 and returns the same objects. For a
+  v2 document it throws `DocumentParseError { code: "unsupported_document" }`
+  with a message pointing at `parseAnyDocument()`.
+- `BlockEditor` emits v1 unless `documentVersion={2}` is set or `value` is v2.
+  `BlockEditorProps` gained an optional type parameter that defaults to
+  `EditorDocument`, so existing `onChange` handlers type-check unchanged.
+- `renderDocumentHtml(v1)` and `<BlockRenderer value={v1}>` output is unchanged.
+  `renderDocumentHtml` gained an optional second `options` argument.
+- Copy-as-HTML/plain text (`blocksToHtml`, `blocksToPlainText`) only differs
+  for media blocks, which v1 documents cannot contain.
+
+### Opting in
+
+1. Read stored JSON with `parseAnyDocument(value)` (accepts v1 and v2).
+2. Upgrade with `migrateDocument(value)`. It keeps block ids and
+   backslash-escapes the marker characters (backslash, `*`, `_`, backtick,
+   `[`, `]`) in existing text, so v1 content renders identically as v2.
+   It is idempotent for v2 input. There is no automatic downgrade.
+3. Pass `documentVersion={2}` to `BlockEditor`; `onChange` then always
+   receives `{ version: 2, blocks }`.
+4. Update server-side validation that pins `version === 1` (for example a
+   Zod schema or a `parseDocument()` call) to `parseAnyDocument()`.
+5. Provide `adapters.uploadImage` to enable image upload; pass
+   `videoProviders={['vimeo', 'youtube']}` to allow YouTube (Vimeo only by default).
+
+v2 limits: image `alt` ≤ 500 chars, `caption` ≤ 1000, `width` 40–4000 px,
+`src` ≤ 2048 chars and `http(s)` or same-origin path only; Vimeo ids are
+digits, hashes 6–32 hex chars; YouTube ids are 11 `[A-Za-z0-9_-]` chars.
+
+## 0.1.x → 1.0.0
+
 
 This is a **breaking** 1.0.0 release. The TipTap 2 page-builder (`PageEditor`,
 `ContentFieldEditor`, page sections, AI helpers, asset pickers, YouTube embeds)

@@ -88,6 +88,64 @@ Also exported: reducer, markdown/slash/paste helpers, selection helpers,
 three-way `mergeBlocks` (for host-controlled live sync), and schema types.
 Server entry `@allebrum/page-editor/server` has no React.
 
+## Version 2: media blocks and inline marks (opt-in, 1.1.0+)
+
+Version 1 stays the default. Nothing changes for a host that does not opt in:
+`parseDocument()` still reads v1 only, `BlockEditor` still emits v1, and v1
+HTML output is byte-for-byte the same.
+
+Opt in with `documentVersion={2}` (or by passing a v2 `value`):
+
+```tsx
+import {
+  BlockEditor, migrateDocument, parseAnyDocument, renderDocumentHtml,
+  type EditorDocumentV2,
+} from '@allebrum/page-editor';
+
+<BlockEditor<EditorDocumentV2>
+  documentVersion={2}
+  value={doc}                       // v1 values are migrated on load
+  onChange={setDoc}                 // always receives { version: 2, blocks }
+  videoProviders={['vimeo']}        // default; add 'youtube' to allow it
+  adapters={{
+    uploadImage: async (file, { onProgress, signal }) => {
+      // resize / validate / upload; report 0–1 progress
+      const res = await myUpload(file, { onProgress, signal });
+      return { src: res.url, assetKey: res.key };
+    },
+  }}
+/>;
+```
+
+What v2 adds:
+
+- **Inline marks** in any text block: `**bold**`, `*italic*` / `_italic_`,
+  `` `code` ``, `[label](https://…)`. A backslash escapes a marker. The canvas
+  shows the markers while editing (source-style); renderers format them.
+  Shortcuts: Ctrl/⌘+B, I, E (code), K (link), plus a small format bar.
+  Unsafe link targets (`javascript:`, `data:`, `//host`, …) render as plain
+  text. External links get `target="_blank" rel="noopener noreferrer nofollow"`.
+- **`image` block** `{ id, type: 'image', src, alt, width?, caption?, assetKey? }`.
+  `src` must be `http(s)` or a same-origin path. The Image slash item and
+  image paste appear only when `adapters.uploadImage` is passed. The canvas
+  shows a progress bar, Retry/Remove on failure, and Alt text / Caption /
+  Width fields. A pending upload is never emitted to `onChange`.
+- **`video` block** `{ id, type: 'video', provider: 'vimeo' | 'youtube', videoId, hash?, title?, caption? }`.
+  Embed-only: the document stores ids, never an iframe or URL. Renderers build
+  `https://player.vimeo.com/video/{id}?dnt=1[&h=hash]` or
+  `https://www.youtube-nocookie.com/embed/{id}` with `sandbox`,
+  `referrerpolicy="strict-origin-when-cross-origin"`, `loading="lazy"`, and an
+  accessible `title`. `parseVideoUrl()` only accepts vimeo.com,
+  player.vimeo.com, youtube.com, youtu.be, and youtube-nocookie.com.
+
+Helpers: `parseAnyDocument` (v1 or v2), `migrateDocument` (v1 → v2, escapes
+existing text so it renders identically), `documentFromPlainText` (wrap a
+legacy string field), `parseInline` / `renderInlineHtml` / `inlineToPlainText`
+(for non-React renderers such as React Native), `parseVideoUrl`,
+`videoEmbedUrl`, `videoWatchUrl` (native fallback link), `sanitizeImageSrc`.
+`renderDocumentHtml(doc, { imageSrc })` and `<BlockRenderer imageSrc>` let a
+host rewrite image URLs (e.g. to an image CDN); the result is re-validated.
+
 ## Demo
 
 ```bash
@@ -106,8 +164,8 @@ Not ported from Hoppa notes: to-do / goal / timer / item-link / embed cards,
 mention picker UI, file/QR/camera upload UI, React Query, sockets, auth,
 autosave, and space-scoped drafts inside the component.
 
-Rich inline marks (bold/italic/links inside a paragraph) are not in this
-canvas — blocks store plain text, matching Hoppa notes.
+Inline marks, images, and video embeds exist only in **version 2** documents
+(opt-in, see below). Version 1 blocks store plain text, matching Hoppa notes.
 
 ## Keyboard and IME
 

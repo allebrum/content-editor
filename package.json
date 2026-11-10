@@ -1,6 +1,6 @@
 {
   "name": "@allebrum/page-editor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hoppa-style portable React block editor (slash menu, markdown shortcuts, block selection). Derived in part from allebrum/company-portal notes.",
   "author": "Allebrum",
   "license": "AGPL-3.0-only",

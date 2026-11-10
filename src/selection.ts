@@ -19,7 +19,8 @@
  * pruning after a merge, keyboard extension, the Cmd/Ctrl+A two-step,
  * replacing a range, and clipboard serialization) so they're unit-tested.
  */
-import type { Block as SpaceBlock } from './types.js';
+import type { AnyBlock, Block as SpaceBlock } from './types.js';
+import { sanitizeImageSrc, videoWatchUrl } from './media';
 
 export type BlockSelection = { anchor: string; focus: string };
 
@@ -143,6 +144,8 @@ export function blocksToPlainText(selected: readonly SpaceBlock[], numbers: Map<
   return selected
     .map((b) => {
       const text = (b.content ?? '').replace(/\u200B/g, '');
+      const media = mediaPlainText(b as AnyBlock);
+      if (media != null) return media;
       switch (b.type) {
         case 'h1': return `# ${text}`;
         case 'h2': return `## ${text}`;
@@ -197,6 +200,11 @@ export function blocksToHtml(selected: readonly SpaceBlock[], numbers: Map<strin
         continue;
     }
     close();
+    const media = mediaHtml(b as AnyBlock);
+    if (media != null) {
+      out.push(media);
+      continue;
+    }
     switch (b.type) {
       case 'h1': out.push(`<h1>${inline(b.content)}</h1>`); break;
       case 'h2': out.push(`<h2>${inline(b.content)}</h2>`); break;
@@ -209,4 +217,25 @@ export function blocksToHtml(selected: readonly SpaceBlock[], numbers: Map<strin
   }
   close();
   return out.join('');
+}
+
+/** v2 media blocks copy as their URL / a link; null for text blocks. */
+function mediaPlainText(b: AnyBlock): string | null {
+  if (b.type === 'image') return `![${b.alt ?? ''}](${b.src ?? ''})`;
+  if (b.type === 'video' && b.provider && b.videoId) {
+    return videoWatchUrl({ provider: b.provider, videoId: b.videoId, hash: b.hash }) ?? '';
+  }
+  return null;
+}
+
+function mediaHtml(b: AnyBlock): string | null {
+  if (b.type === 'image') {
+    const src = sanitizeImageSrc(b.src);
+    return src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(b.alt ?? '')}">` : '';
+  }
+  if (b.type === 'video') {
+    const href = b.provider && b.videoId ? videoWatchUrl({ provider: b.provider, videoId: b.videoId, hash: b.hash }) : null;
+    return href ? `<p><a href="${escapeHtml(href)}">${escapeHtml(b.title || href)}</a></p>` : '';
+  }
+  return null;
 }
