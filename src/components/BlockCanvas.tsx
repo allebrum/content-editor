@@ -414,12 +414,18 @@ function VideoCard({ block, api }: { block: AnyBlock; api: EditorApi }) {
       ) : api.readOnly ? (
         <div className="pe-media-empty">Video not set</div>
       ) : (
-        <form
+        // Not a <form>: the editor is often placed inside a host form, and a
+        // nested form's submit would bubble (through React) to the host's onSubmit.
+        <div
+          role="group"
+          aria-label={`Embed a ${names} video`}
           className="pe-video-form"
-          onKeyDown={stop}
-          onSubmit={(e) => {
-            e.preventDefault();
-            embed();
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              embed();
+            }
           }}
         >
           <input
@@ -430,10 +436,10 @@ function VideoCard({ block, api }: { block: AnyBlock; api: EditorApi }) {
             placeholder={`Paste a ${names} link`}
             onChange={(e) => setUrl(e.target.value)}
           />
-          <button type="submit" className="pe-btn">Embed</button>
+          <button type="button" className="pe-btn" onClick={embed}>Embed</button>
           <button type="button" className="pe-btn" onClick={() => api.remove(block.id)}>Cancel</button>
           {error && <p className="pe-media-warn" role="alert">{error}</p>}
-        </form>
+        </div>
       )}
       {ready && !api.readOnly && (
         <div className="pe-media-fields" onKeyDown={stop}>

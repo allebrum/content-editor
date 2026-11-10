@@ -139,4 +139,27 @@ describe('BlockEditor v2', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Embed' }));
     expect(lastDoc(onChange).blocks).toEqual([{ id: 'a', type: 'video', provider: 'vimeo', videoId: '76979871' }]);
   });
+
+  it('embeds a video with Enter inside a host <form> without submitting it', async () => {
+    const onChange = vi.fn();
+    const onSubmit = vi.fn((e: { preventDefault: () => void }) => e.preventDefault());
+    const { container } = render(
+      <form onSubmit={onSubmit}>
+        <BlockEditor<EditorDocumentV2>
+          value={{ version: 2, blocks: [{ id: 'a', type: 'text', content: '' }] }}
+          onChange={onChange}
+        />
+      </form>,
+    );
+    const box = screen.getByTestId('block-a');
+    box.textContent = '/video';
+    fireEvent.input(box);
+    fireEvent.click(await screen.findByText('Video'));
+    expect(container.querySelectorAll('form')).toHaveLength(1);
+    const input = await screen.findByLabelText('Vimeo link');
+    fireEvent.change(input, { target: { value: 'https://vimeo.com/76979871' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(lastDoc(onChange).blocks).toEqual([{ id: 'a', type: 'video', provider: 'vimeo', videoId: '76979871' }]);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });
