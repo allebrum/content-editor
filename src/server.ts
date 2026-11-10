@@ -22,3 +22,45 @@ export type { Action, MarkdownShortcut } from './blocks';
 export { mergeBlocks, sameBlocks } from './merge';
 export { applyDraft, draftKey, saveDraft, takeDraft, DRAFT_TTL_MS } from './drafts';
 export type { NotesDraft, DraftStorage } from './drafts';
+
+// Version 2: media blocks and inline marks (additive; see MIGRATION.md).
+export type {
+  AnyBlock,
+  AnyBlockType,
+  AnyEditorDocument,
+  DocumentVersion,
+  EditorDocumentV2,
+  ImageBlock,
+  ImageUploadContext,
+  ImageUploadResult,
+  MediaBlockType,
+  VideoBlock,
+  VideoProvider,
+} from './types';
+export {
+  LATEST_DOCUMENT_VERSION, SUPPORTED_DOCUMENT_VERSIONS, MEDIA_BLOCK_TYPES, VIDEO_PROVIDERS,
+} from './types';
+export {
+  parseAnyDocument, migrateDocument, emptyDocumentV2, documentFromPlainText,
+} from './schema';
+export {
+  parseInline, escapeInline, inlineToPlainText, inlineNodesToText, inlineNodesToHtml, renderInlineHtml,
+  toggleInlineMark, LINK_REL,
+} from './inline';
+export type { InlineNode, InlineMark } from './inline';
+export {
+  parseVideoUrl, videoEmbedUrl, videoWatchUrl, sanitizeImageSrc, isValidVideoId, isValidVimeoHash,
+  providerLabel, DEFAULT_VIDEO_PROVIDERS, VIDEO_IFRAME_ATTRS, MAX_URL_LENGTH, MAX_ALT_LENGTH,
+  MAX_CAPTION_LENGTH, MIN_IMAGE_WIDTH, MAX_IMAGE_WIDTH,
+} from './media';
+export type { ParsedVideo } from './media';
+export { renderAnyBlockHtml } from './render-html';
+export type { RenderHtmlOptions } from './render-html';
+
+// WYSIWYG inline marks content model (DOM-free).
+export {
+  richFromContent, serializeRich, canonicalContent, contentLength, sliceContent, joinContent,
+  insertRich, insertContent, toggleRichMark, activeMarks, autoFormat,
+} from './rich';
+export type { Marks, RichChar, RichSegment } from './rich';
+export { MARK_SEPARATOR } from './inline';
