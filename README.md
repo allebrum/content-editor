@@ -119,10 +119,23 @@ import {
 
 What v2 adds:
 
-- **Inline marks** in any text block: `**bold**`, `*italic*` / `_italic_`,
-  `` `code` ``, `[label](https://…)`. A backslash escapes a marker. The canvas
-  shows the markers while editing (source-style); renderers format them.
-  Shortcuts: Ctrl/⌘+B, I, E (code), K (link), plus a small format bar.
+- **Inline marks** in any text block, edited WYSIWYG: the canvas shows bold,
+  italic, inline code and links as formatted text with no visible markers.
+  - Ctrl/⌘+B, I, E (code), K (link), and a format bar whose buttons show
+    the marks at the selection. With nothing selected, B/I/E toggle the
+    marks for what you type next. Ctrl/⌘+K inside a link removes it.
+  - Markdown-style shortcuts convert as you type the closing marker:
+    `**bold**`, `__bold__`, `*italic*`, `_italic_`, `` `code` ``,
+    `[label](https://…)`. Undo right after brings the markers back.
+  - Per-block Undo/Redo (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z, Ctrl+Y and the browser's
+    Edit menu), selection kept across formatting, IME-safe (nothing is
+    rewritten while composing; toggled marks apply to the composed text).
+  - Paste keeps bold, italic, code and safe links from HTML (Google Docs,
+    Word, web pages) and drops everything else; plain text pastes literally.
+  - Storage is the markdown-like string `**bold**`, `*italic*`, `` `code` ``,
+    `[label](https://…)`, with backslash escapes; see MIGRATION.md for the
+    canonical form. `richFromContent()` / `serializeRich()` and friends expose
+    the same model for hosts.
   Unsafe link targets (`javascript:`, `data:`, `//host`, …) render as plain
   text. External links get `target="_blank" rel="noopener noreferrer nofollow"`.
 - **`image` block** `{ id, type: 'image', src, alt, width?, caption?, assetKey? }`.

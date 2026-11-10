@@ -31,6 +31,32 @@ It is opt-in. If you do nothing:
 5. Provide `adapters.uploadImage` to enable image upload; pass
    `videoProviders={['vimeo', 'youtube']}` to allow YouTube (Vimeo only by default).
 
+### WYSIWYG editing of inline marks (v2 only)
+
+The v2 canvas edits formatted text directly; stored markers are never shown.
+The **stored format is unchanged**: `content` is still the markdown-like
+string, so documents written before and after this change read the same.
+Notes for hosts:
+
+- The editor writes *canonical* content: `_x_` is saved as `*x*`,
+  whitespace at the edge of bold/italic moves outside the mark, and a
+  U+2060 WORD JOINER separates `*` markers that would otherwise touch
+  (`*a*\u2060**b**`). Every parser in this package ignores U+2060, and it is
+  never part of the visible text. Content is only rewritten when a block is
+  edited; `canonicalContent()` normalizes on demand.
+- Text typed or pasted as plain text is literal: `2 * 3` is stored as
+  `2 \* 3`. Typed shortcuts (`**text**`, `*text*`, `_text_`, `__text__`,
+  `` `text` ``, `[text](url)`) convert when the closing marker is typed.
+- Pasted HTML keeps only bold, italic, code and safe links.
+- Caret offsets that the editor passes around (focus positions, slash
+  `tokenStart`, `ExtraSlashCommand.run({ caret })`) are visible-text
+  offsets in v2. `slashPickPlan()` gained an optional `removeToken` argument.
+- `blocksToPlainText()` and `blocksToHtml()` gained an optional third
+  argument `{ inlineMarks: true }` that copies formatted text instead of the
+  stored markers. Without it, output is unchanged.
+- v1 editing is untouched: v1 blocks are still plain text nodes, markers
+  are literal, and no undo stack or auto-formatting is added.
+
 v2 limits: image `alt` ≤ 500 chars, `caption` ≤ 1000, `width` 40–4000 px,
 `src` ≤ 2048 chars and `http(s)` or same-origin path only; Vimeo ids are
 digits, hashes 6–32 hex chars; YouTube ids are 11 `[A-Za-z0-9_-]` chars.

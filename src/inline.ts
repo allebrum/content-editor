@@ -7,6 +7,10 @@
  * content is always literal; `migrateDocument()` escapes it so it renders
  * the same after the upgrade.
  *
+ * U+2060 WORD JOINER is a zero-width separator between adjacent markers
+ * (`*a*\u2060**b**`); it is never part of the text. The editor's serializer
+ * inserts it only where two `*` markers would otherwise touch.
+ *
  * DOM-free and React-free so servers and React Native hosts can share it.
  */
 import { escapeHtml, sanitizeHref } from './sanitize';
@@ -21,6 +25,8 @@ export type InlineNode =
   | { type: 'link'; href: string; children: InlineNode[] };
 
 const ESCAPABLE = new Set(['\\', '*', '_', '`', '[', ']']);
+/** Zero-width separator between adjacent markers; ignored as text. */
+export const MARK_SEPARATOR = '\u2060';
 const MAX_DEPTH = 4;
 
 /** Backslash-escape every inline marker so text renders literally in v2. */
@@ -79,6 +85,10 @@ function parse(src: string, depth: number): InlineNode[] {
   let i = 0;
   while (i < src.length) {
     const ch = src[i]!;
+    if (ch === MARK_SEPARATOR) {
+      i++;
+      continue;
+    }
     if (ch === '\\' && i + 1 < src.length && ESCAPABLE.has(src[i + 1]!)) {
       pushText(out, src[i + 1]!);
       i += 2;
@@ -87,7 +97,7 @@ function parse(src: string, depth: number): InlineNode[] {
     if (ch === '`') {
       const close = src.indexOf('`', i + 1);
       if (close > i + 1) {
-        out.push({ type: 'code', text: src.slice(i + 1, close) });
+        out.push({ type: 'code', text: src.slice(i + 1, close).replace(/\u2060/g, '') });
         i = close + 1;
         continue;
       }

@@ -18,11 +18,16 @@ import {
 import { TURN_INTO_OPTIONS } from '../commands';
 import {
   caretBox, caretOnFirstLine, caretOnLastLine, getOffsets, needsNormalize,
-  readText, setCaret, writeText,
+  readText, setCaret, setSelectionRange, writeText,
 } from '../dom';
+import {
+  activeMarks, applyMarksToRange, autoFormat, AUTOFORMAT_TRIGGERS, contentLength, insertContent, insertRich,
+  joinContent, marksAt, richFromContent, sliceContent, toggleMarks, toggleRichMark, type Marks,
+} from '../rich';
+import { htmlToContentLines, needsRichNormalize, readRichContent, writeRich } from '../rich-dom';
 import { selectAllEscalates, shiftArrowLeavesBlock } from '../selection';
 import type { AnyBlock, Block, BlockType, VideoBlock, VideoProvider } from '../types';
-import type { InlineMark } from '../inline';
+import { inlineToPlainText, type InlineMark } from '../inline';
 import { parseVideoUrl, providerLabel, sanitizeImageSrc } from '../media';
 import { VideoEmbed } from '../renderer';
 import { Popover } from './Popover';
@@ -59,6 +64,12 @@ export type EditorApi = {
   /** True for version 2 documents: inline marks and media blocks are enabled. */
   inlineMarks: boolean;
   applyMark: (id: string, mark: InlineMark) => void;
+  /** v2: ask the host for a link URL; resolves to a safe href or null. */
+  requestLink: (selectedText: string) => Promise<string | null>;
+  /** v2: blocks register a handle so the format bar can reach them. Returns an unregister function. */
+  registerRich: (id: string, handle: RichHandle) => () => void;
+  /** v2: the marks at the selection may have changed (refresh the format bar). */
+  marksChanged: () => void;
   patchMedia: (id: string, patch: Partial<AnyBlock>) => void;
   uploads: Record<string, PendingUpload>;
   pickImage: (id: string) => void;
@@ -452,6 +463,18 @@ function VideoCard({ block, api }: { block: AnyBlock; api: EditorApi }) {
   );
 }
 
+type Snap = { content: string; start: number; end: number };
+type History = { undo: Snap[]; redo: Snap[]; last: number; kind: 'type' | 'edit' | null };
+const HISTORY_LIMIT = 200;
+const TYPING_GROUP_MS = 1000;
+
+/** Per-block handle the editor uses for the format bar (v2 only). */
+export type RichHandle = {
+  applyMark: (mark: InlineMark) => void;
+  /** Marks at the current selection, or null when the block has no selection. */
+  marks: () => Marks | null;
+};
+
 function EditableBlock({
   block,
   index,
@@ -471,16 +494,45 @@ function EditableBlock({
   const dismissedSlashRef = useRef<number | null>(null);
   const wasSlashOpen = useRef(false);
   const content = block.content ?? '';
+  /** v2: formatted spans in the DOM, visible-text offsets, stored markers. */
+  const rich = api.inlineMarks;
+  const pendingRef = useRef<{ at: number; marks: Marks } | null>(null);
+  const compositionStartRef = useRef<number | null>(null);
+  const historyRef = useRef<History>({ undo: [], redo: [], last: 0, kind: null });
+  const stateRef = useRef<Snap>({ content, start: 0, end: 0 });
+  /** Latest stored content (handlers may run before a re-render). */
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const save = (next: string) => {
+    if (next === contentRef.current) return;
+    contentRef.current = next;
+    api.setContent(block.id, next);
+  };
+
+  const paint = (el: HTMLElement, c: string) => (rich ? writeRich(el, c) : writeText(el, c));
+  const visibleLength = (c: string) => (rich ? contentLength(c) : c.length);
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || composingRef.current) return;
-    if (readText(el, { ignoreTrailingBr: true }) === content && !needsNormalize(el, content)) return;
+    if (content !== stateRef.current.content) {
+      // Changed outside this block's own typing (split, merge, host value): new history.
+      historyRef.current = { undo: [], redo: [], last: 0, kind: null };
+      stateRef.current = { content, start: 0, end: 0 };
+      pendingRef.current = null;
+    }
+    const stale = rich
+      ? readRichContent(el) !== content || needsRichNormalize(el, content)
+      : readText(el, { ignoreTrailingBr: true }) !== content || needsNormalize(el, content);
+    if (!stale) return;
     const hadFocus = document.activeElement === el;
     const off = hadFocus ? getOffsets(el) : null;
-    writeText(el, content);
-    if (hadFocus) setCaret(el, Math.min(off?.end ?? content.length, content.length));
-  }, [content, block.id, block.type]);
+    paint(el, content);
+    if (hadFocus) {
+      const len = visibleLength(content);
+      setSelectionRange(el, Math.min(off?.start ?? len, len), Math.min(off?.end ?? len, len));
+    }
+  }, [content, block.id, block.type, rich]);
 
   useEffect(() => {
     if (wasSlashOpen.current && !slashOpen) {
@@ -495,17 +547,40 @@ function EditableBlock({
     wasSlashOpen.current = slashOpen;
   }, [slashOpen]);
 
-  const commit = (el: HTMLDivElement, text: string, caret: number) => {
+  /** Save the state before a change for Undo; quick typing collapses into one step. */
+  const pushHistory = (kind: 'type' | 'edit', sel?: { start: number; end: number }) => {
+    if (!rich) return;
+    const h = historyRef.current;
+    const now = Date.now();
+    if (kind === 'type' && h.kind === 'type' && now - h.last < TYPING_GROUP_MS && h.undo.length) {
+      h.last = now;
+      return;
+    }
+    h.undo.push(sel ? { content: stateRef.current.content, start: sel.start, end: sel.end } : { ...stateRef.current });
+    if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
+    h.redo = [];
+    h.kind = kind;
+    h.last = now;
+  };
+
+  /**
+   * `text` is what the reader sees, `stored` the block content to save
+   * (the same string for v1). `caret` is a visible offset.
+   */
+  const commit = (el: HTMLDivElement, text: string, caret: number, stored: string = text, kind: 'type' | 'edit' = 'type') => {
     if (api.readOnly) return;
     if (block.type === 'text') {
       const md = matchMarkdownShortcut(text, caret);
       if (md) {
         api.openSlash(block.id, null);
-        api.markdown(block.id, md, text);
+        api.markdown(block.id, md, stored);
         return;
       }
     }
-    if (text !== content) api.setContent(block.id, text);
+    if (stored !== stateRef.current.content) pushHistory(kind);
+    stateRef.current = { content: stored, start: caret, end: caret };
+    save(stored);
+    api.marksChanged();
 
     const tok = findSlashToken(text, caret);
     if (tok && tok.tokenStart !== dismissedSlashRef.current) {
@@ -521,17 +596,88 @@ function EditableBlock({
     if (slashOpen) api.openSlash(block.id, null);
   };
 
-  const handleInput = () => {
+  /** v2: replace the block with `next` content, caret/selection at visible offsets. */
+  const applyRich = (
+    el: HTMLDivElement,
+    next: string,
+    start: number,
+    end = start,
+    kind: 'type' | 'edit' = 'edit',
+    before?: { start: number; end: number },
+  ) => {
+    if (before && next !== stateRef.current.content) {
+      pushHistory(kind, before);
+      stateRef.current = { content: next, start, end };
+    }
+    writeRich(el, next);
+    setSelectionRange(el, start, end);
+    if (start !== end) {
+      // A kept selection (mark toggles): commit without slash/markdown checks.
+      if (next !== stateRef.current.content) pushHistory(kind);
+      stateRef.current = { content: next, start, end };
+      save(next);
+      api.marksChanged();
+      return;
+    }
+    commit(el, readText(el, { ignoreTrailingBr: true }), start, next, kind);
+  };
+
+  const handleInput = (e?: React.FormEvent<HTMLDivElement>) => {
     const el = ref.current;
     if (!el || composingRef.current || api.readOnly) return;
     const off = getOffsets(el);
     const text = readText(el, { ignoreTrailingBr: true });
     const caret = Math.min(off?.end ?? text.length, text.length);
-    if (needsNormalize(el, text)) {
-      writeText(el, text);
-      setCaret(el, caret);
+    if (!rich) {
+      if (needsNormalize(el, text)) {
+        writeText(el, text);
+        setCaret(el, caret);
+      }
+      commit(el, text, caret);
+      return;
     }
-    commit(el, text, caret);
+    const stored = readRichContent(el);
+    if (needsRichNormalize(el, stored)) {
+      writeRich(el, stored);
+      setSelectionRange(el, Math.min(off?.start ?? caret, text.length), caret);
+    }
+    const native = e?.nativeEvent as InputEvent | undefined;
+    const typed = native && native.inputType === 'insertText' && typeof native.data === 'string' ? native.data : null;
+    if (typed && AUTOFORMAT_TRIGGERS.has(typed.slice(-1)) && (!off || off.start === off.end)) {
+      const auto = autoFormat(stored, caret);
+      if (auto) {
+        // Undo goes back to the typed markers first.
+        if (stored !== stateRef.current.content) pushHistory('type');
+        stateRef.current = { content: stored, start: caret, end: caret };
+        historyRef.current.kind = null;
+        applyRich(el, auto.content, auto.caret, auto.caret, 'edit');
+        // Keep typing unformatted after the converted text, like Notion.
+        if (auto.applied !== 'link') {
+          const m = marksAt(richFromContent(auto.content), auto.caret);
+          pendingRef.current = { at: auto.caret, marks: { ...m, [auto.applied]: false } };
+          api.marksChanged();
+        }
+        return;
+      }
+    }
+    commit(el, text, caret, stored);
+  };
+
+  const undo = (redo: boolean) => {
+    const el = ref.current;
+    if (!el || api.readOnly) return;
+    const h = historyRef.current;
+    const from = redo ? h.redo : h.undo;
+    const snap = from.pop();
+    if (!snap) return;
+    (redo ? h.undo : h.redo).push({ ...stateRef.current });
+    h.kind = null;
+    pendingRef.current = null;
+    stateRef.current = { ...snap };
+    writeRich(el, snap.content);
+    setSelectionRange(el, snap.start, snap.end);
+    save(snap.content);
+    api.marksChanged();
   };
 
   const insertAtCaret = (insert: string) => {
@@ -539,12 +685,126 @@ function EditableBlock({
     if (!el) return;
     const text = readText(el, { ignoreTrailingBr: true });
     const off = getOffsets(el) ?? { start: text.length, end: text.length };
+    if (rich) {
+      const res = insertRich(readRichContent(el), off.start, off.end, insert, pendingAt(off.start));
+      pendingRef.current = null;
+      applyRich(el, res.content, res.caret, res.caret, 'type');
+      return;
+    }
     const next = text.slice(0, off.start) + insert + text.slice(off.end);
     const caret = off.start + insert.length;
     writeText(el, next);
     setCaret(el, caret);
     commit(el, next, caret);
   };
+
+  const pendingAt = (offset: number): Marks | undefined => {
+    const p = pendingRef.current;
+    return p && p.at === offset ? p.marks : undefined;
+  };
+
+  const applyMark = async (mark: InlineMark) => {
+    const el = ref.current;
+    if (!el || api.readOnly || !rich) return;
+    const stored = readRichContent(el);
+    const len = contentLength(stored);
+    const off = getOffsets(el) ?? { start: len, end: len };
+    const collapsed = off.start === off.end;
+    if (mark !== 'link' && collapsed) {
+      // Nothing selected: toggle the marks the next typed characters get.
+      const base = pendingAt(off.start) ?? marksAt(richFromContent(stored), off.start);
+      pendingRef.current = { at: off.start, marks: toggleMarks(base, mark) };
+      api.marksChanged();
+      return;
+    }
+    let href: string | undefined;
+    if (mark === 'link') {
+      const active = activeMarks(stored, off.start, off.end);
+      const insideLink = collapsed ? !!(richFromContent(stored)[off.start - 1]?.m.href) : !!active.href;
+      if (!insideLink) {
+        const plain = readText(el, { ignoreTrailingBr: true });
+        const asked = await api.requestLink(plain.slice(off.start, off.end));
+        if (!asked) {
+          el.focus({ preventScroll: true });
+          setSelectionRange(el, off.start, off.end);
+          return;
+        }
+        href = asked;
+      }
+    }
+    const current = readRichContent(el);
+    const next = toggleRichMark(current, off.start, off.end, mark, href);
+    el.focus({ preventScroll: true });
+    if (next.content === current) {
+      setSelectionRange(el, off.start, off.end);
+      return;
+    }
+    applyRich(el, next.content, next.start, next.end, 'edit', off);
+  };
+
+  const handle: RichHandle = {
+    applyMark: (mark) => { void applyMark(mark); },
+    marks: () => {
+      const el = ref.current;
+      if (!el) return null;
+      const off = getOffsets(el);
+      if (!off) return null;
+      const p = pendingRef.current;
+      if (p && (off.start !== off.end || off.start !== p.at)) pendingRef.current = null;
+      return pendingAt(off.start) && off.start === off.end
+        ? pendingRef.current!.marks
+        : activeMarks(readRichContent(el), off.start, off.end);
+    },
+  };
+  const handleRef = useRef(handle);
+  handleRef.current = handle;
+
+  useEffect(() => {
+    if (!rich) return;
+    return api.registerRich(block.id, {
+      applyMark: (m) => handleRef.current.applyMark(m),
+      marks: () => handleRef.current.marks(),
+    });
+  }, [rich, block.id, api.registerRich]);
+
+  /** Native beforeinput: typing with toggled marks, and the browser's Undo/Redo commands. */
+  const beforeInputRef = useRef<(e: InputEvent) => void>(() => undefined);
+  beforeInputRef.current = (e: InputEvent) => {
+    const el = ref.current;
+    if (!el || !rich || api.readOnly) return;
+    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+      e.preventDefault();
+      undo(e.inputType === 'historyRedo');
+      return;
+    }
+    if (e.isComposing || composingRef.current) return;
+    if (e.inputType !== 'insertText' || !e.data) return;
+    const off = getOffsets(el);
+    if (!off || off.start !== off.end) {
+      pendingRef.current = null;
+      return;
+    }
+    let p = pendingRef.current;
+    if (p && off.start !== p.at) p = pendingRef.current = null;
+    if (!p) {
+      // Typing right after a link: browsers would extend the link; don't.
+      const chars = richFromContent(readRichContent(el));
+      const prev = chars[off.start - 1];
+      if (!prev?.m.href || chars[off.start]?.m.href === prev.m.href) return;
+      p = { at: off.start, marks: marksAt(chars, off.start) };
+    }
+    e.preventDefault();
+    const res = insertRich(readRichContent(el), off.start, off.end, e.data, p.marks);
+    pendingRef.current = null;
+    applyRich(el, res.content, res.caret, res.caret, 'type');
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !rich) return;
+    const listener = (e: Event) => beforeInputRef.current(e as InputEvent);
+    el.addEventListener('beforeinput', listener);
+    return () => el.removeEventListener('beforeinput', listener);
+  }, [rich]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229 || composingRef.current) return;
@@ -558,6 +818,7 @@ function EditableBlock({
     const off = getOffsets(el) ?? { start: text.length, end: text.length };
     const collapsed = off.start === off.end;
     const mod = e.metaKey || e.ctrlKey || e.altKey;
+    const stored = () => (rich ? readRichContent(el) : text);
 
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
       if (selectAllEscalates(text.length, off.start, off.end)) {
@@ -577,12 +838,22 @@ function EditableBlock({
 
     if (api.readOnly) return;
 
+    if (rich && (e.metaKey || e.ctrlKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if ((k === 'z' && !e.shiftKey) || (k === 'z' && e.shiftKey) || (k === 'y' && e.ctrlKey && !e.metaKey && !e.shiftKey)) {
+        e.preventDefault();
+        undo(k === 'y' || e.shiftKey);
+        return;
+      }
+    }
+
     if (api.inlineMarks && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
       const k = e.key.toLowerCase();
       const mark: InlineMark | null = k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'e' ? 'code' : k === 'k' ? 'link' : null;
       if (mark) {
         e.preventDefault();
-        api.applyMark(block.id, mark);
+        if (rich) void applyMark(mark);
+        else api.applyMark(block.id, mark);
         return;
       }
     }
@@ -596,6 +867,11 @@ function EditableBlock({
         }
         if (isEmptyContent(text) && isList(block.type)) {
           api.turnInto(block.id, 'text');
+          return;
+        }
+        if (rich) {
+          const c = stored();
+          api.split(block.id, sliceContent(c, 0, off.start), sliceContent(c, off.end));
           return;
         }
         api.split(block.id, text.slice(0, off.start), text.slice(off.end));
@@ -613,12 +889,12 @@ function EditableBlock({
           api.remove(block.id, { focus: index === 0 ? 'next' : 'prev' });
           return;
         }
-        if (index > 0) api.mergePrev(block.id, text);
+        if (index > 0) api.mergePrev(block.id, stored());
         return;
       }
       case 'Delete': {
         if (!collapsed || off.end !== text.length || mod) return;
-        if (api.mergeNext(block.id, text)) e.preventDefault();
+        if (api.mergeNext(block.id, stored())) e.preventDefault();
         return;
       }
       case 'ArrowUp':
@@ -652,6 +928,29 @@ function EditableBlock({
       return;
     }
     e.preventDefault();
+    const el = ref.current;
+    if (rich) {
+      if (!el) return;
+      // Formatted paste: only bold, italic, code and safe links survive.
+      const html = e.clipboardData.getData('text/html');
+      const raw = e.clipboardData.getData('text/plain');
+      let lines = html ? htmlToContentLines(html) : [];
+      if (!lines.length && raw) lines = pastedLines(raw).map((l) => insertRich('', 0, 0, l, {}).content);
+      if (!lines.length) return;
+      const text = readText(el, { ignoreTrailingBr: true });
+      const off = getOffsets(el) ?? { start: text.length, end: text.length };
+      const c = readRichContent(el);
+      if (lines.length <= 1 || block.type === 'quote' || block.type === 'callout') {
+        const joined = lines.length <= 1 ? (lines[0] ?? '') : joinContent(...lines.flatMap((l, i) => (i ? ['\n', l] : [l])));
+        const res = insertContent(c, off.start, off.end, joined);
+        pendingRef.current = null;
+        applyRich(el, res.content, res.caret, res.caret, 'edit', off);
+        return;
+      }
+      api.openSlash(block.id, null);
+      api.pasteLines(block.id, sliceContent(c, 0, off.start), lines, sliceContent(c, off.end));
+      return;
+    }
     const raw = e.clipboardData.getData('text/plain');
     if (!raw) return;
     const lines = pastedLines(raw);
@@ -659,7 +958,6 @@ function EditableBlock({
       insertAtCaret(lines.length <= 1 ? (lines[0] ?? '') : lines.join('\n'));
       return;
     }
-    const el = ref.current;
     if (!el) return;
     const text = readText(el, { ignoreTrailingBr: true });
     const off = getOffsets(el) ?? { start: text.length, end: text.length };
@@ -698,6 +996,8 @@ function EditableBlock({
     return null;
   })();
 
+  const empty = isEmptyContent(rich ? inlineToPlainText(content) : content);
+
   return (
     <div className="pe-line">
       {prefix}
@@ -710,7 +1010,8 @@ function EditableBlock({
         aria-readonly={api.readOnly || undefined}
         aria-label={api.ariaLabel || placeholderFor(block, true, api.placeholder) || 'Text'}
         data-block-id={block.id}
-        data-empty={isEmptyContent(content) ? 'true' : 'false'}
+        data-rich={rich ? 'true' : undefined}
+        data-empty={empty ? 'true' : 'false'}
         data-placeholder={placeholderFor(block, focused, api.placeholder, api.idlePlaceholderBlockId === block.id)}
         data-testid={`block-${block.id}`}
         onInput={handleInput}
@@ -718,15 +1019,35 @@ function EditableBlock({
         onPaste={onPaste}
         onCompositionStart={() => {
           composingRef.current = true;
-          if (ref.current) ref.current.dataset.empty = 'false';
+          const el = ref.current;
+          if (el) {
+            el.dataset.empty = 'false';
+            compositionStartRef.current = getOffsets(el)?.start ?? null;
+          }
         }}
         onCompositionEnd={() => {
           composingRef.current = false;
+          const el = ref.current;
+          const startAt = compositionStartRef.current;
+          compositionStartRef.current = null;
+          const marks = startAt != null ? pendingAt(startAt) : undefined;
+          if (rich && el && marks && startAt != null) {
+            // Text composed while typing marks were toggled gets those marks.
+            const off = getOffsets(el);
+            const end = off?.end ?? startAt;
+            pendingRef.current = null;
+            if (end > startAt) {
+              const stored = applyMarksToRange(readRichContent(el), startAt, end, marks);
+              applyRich(el, stored, end, end, 'type');
+              return;
+            }
+          }
           handleInput();
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => {
           setFocused(false);
+          pendingRef.current = null;
           if (slashOpen) api.openSlash(block.id, null);
         }}
         className={`pe-text pe-text-${block.type}${block.type === 'checkbox' && block.checked ? ' is-checked' : ''}`}

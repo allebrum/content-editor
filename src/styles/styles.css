@@ -44,6 +44,10 @@
   flex: 1; min-width: 0; outline: none; white-space: pre-wrap; word-break: break-word;
   font-size: 15px; line-height: 1.6; color: #1f2937;
 }
+.pe-text strong { font-weight: 700; }
+.pe-text em { font-style: italic; }
+.pe-text code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: #f3f4f6; border-radius: 4px; padding: 0.05em 0.3em; }
+.pe-text a { color: var(--pe-accent); text-decoration: underline; text-underline-offset: 2px; }
 .pe-text[data-empty='true']::before { content: attr(data-placeholder); color: #9ca3af; pointer-events: none; }
 .pe-text-h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin: 0.5rem 0; }
 .pe-text-h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 0.5rem 0; }
@@ -97,6 +101,7 @@
 .pe-format { display: inline-flex; gap: 2px; margin-right: auto; }
 .pe-format-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #4b5563; cursor: pointer; }
 .pe-format-btn:hover, .pe-format-btn:focus-visible { background: var(--pe-accent-soft); color: var(--pe-accent); }
+.pe-format-btn[aria-pressed='true'] { background: var(--pe-accent-soft); color: var(--pe-accent); }
 .pe-render code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: #f3f4f6; border-radius: 4px; padding: 0.05em 0.3em; }
 .pe-render a { color: var(--pe-accent); text-decoration: underline; }
 

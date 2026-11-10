@@ -56,3 +56,11 @@ export {
 export type { ParsedVideo } from './media';
 export { renderAnyBlockHtml } from './render-html';
 export type { RenderHtmlOptions } from './render-html';
+
+// WYSIWYG inline marks content model (DOM-free).
+export {
+  richFromContent, serializeRich, canonicalContent, contentLength, sliceContent, joinContent,
+  insertRich, insertContent, toggleRichMark, activeMarks, autoFormat,
+} from './rich';
+export type { Marks, RichChar, RichSegment } from './rich';
+export { MARK_SEPARATOR } from './inline';

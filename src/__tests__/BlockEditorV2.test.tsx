@@ -27,9 +27,10 @@ describe('BlockEditor v2', () => {
   it('migrates a v1 value when documentVersion is 2 and emits v2', () => {
     const onChange = vi.fn();
     render(<BlockEditor<AnyEditorDocument> documentVersion={2} value={v1('2 * 3')} onChange={onChange} />);
-    expect(screen.getByTestId('block-a')).toHaveTextContent('2 \\* 3');
+    // WYSIWYG: the migrated escape is not shown; the star is literal text.
+    expect(screen.getByTestId('block-a')).toHaveTextContent('2 * 3');
     const box = screen.getByTestId('block-a');
-    box.textContent = 'now **bold**';
+    box.innerHTML = 'now <strong>bold</strong>';
     fireEvent.input(box);
     expect(lastDoc(onChange)).toEqual({ version: 2, blocks: [{ id: 'a', type: 'text', content: 'now **bold**' }] });
     expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeInTheDocument();

@@ -4,15 +4,15 @@
  * without product stores, sockets, uploads, or auth.
  * Licensed under AGPL-3.0. See LICENSE and NOTICE.
  */
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Bold, Code, Italic, Link2 } from 'lucide-react';
 import {
   blockId, emptyText, isEditable, isEmptyContent, reducer, removeSlashToken,
 } from '../blocks';
 import { extraCommandsFromAdapters, SLASH_COMMANDS, type CommandDef } from '../commands';
-import { getOffsets, placeCaretNearX, readText, setCaret, setSelectionRange, writeText } from '../dom';
+import { placeCaretNearX, setCaret } from '../dom';
 import {
-  markdownPlan, mergeNextPlan, mergePrevPlan, pasteLinesPlan, slashPickPlan, splitBlockPlan,
+  markdownPlan, mergeNextPlan, mergePrevPlan, pasteLinesPlan, slashPickPlan, splitBlockPlan, type EditResult,
 } from '../editing';
 import { documentsEqual, emptyDocument, migrateDocument, parseAnyDocument } from '../schema';
 import type {
@@ -20,10 +20,11 @@ import type {
   VideoProvider,
 } from '../types';
 import { DocumentParseError } from '../errors';
-import { toggleInlineMark, type InlineMark } from '../inline';
+import { inlineToPlainText, type InlineMark } from '../inline';
+import { contentLength, joinContent, sliceContent, type Marks } from '../rich';
 import { DEFAULT_VIDEO_PROVIDERS, providerLabel, sanitizeImageSrc } from '../media';
 import { sanitizeHref } from '../sanitize';
-import { BlockRow, type EditorApi, type PendingUpload, type SlashOpen } from './BlockCanvas';
+import { BlockRow, type EditorApi, type PendingUpload, type RichHandle, type SlashOpen } from './BlockCanvas';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SlashMenu } from './SlashMenu';
 import { useBlockSelection } from './useBlockSelection';
@@ -211,6 +212,7 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
     focusAfterRender,
     canvasRef,
     notify: locked ? undefined : notify,
+    inlineMarks: version === 2,
   });
 
   const insertAfter = (afterId: string | null, b?: Partial<Block>) => {
@@ -376,30 +378,66 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
     });
   };
 
-  const applyMark = async (id: string, mark: InlineMark) => {
+  const richHandles = useRef(new Map<string, RichHandle>());
+  const [activeMarks, setActiveMarks] = useState<Marks | null>(null);
+  const refreshMarks = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const id = active?.getAttribute?.('data-block-id');
+    const next = (id && richHandles.current.get(id)?.marks()) || null;
+    setActiveMarks((prev) => (sameActive(prev, next) ? prev : next));
+  }, []);
+  const registerRich = useCallback((id: string, handle: RichHandle) => {
+    richHandles.current.set(id, handle);
+    return () => {
+      if (richHandles.current.get(id) === handle) richHandles.current.delete(id);
+    };
+  }, []);
+  useEffect(() => {
+    if (version !== 2) return;
+    document.addEventListener('selectionchange', refreshMarks);
+    return () => document.removeEventListener('selectionchange', refreshMarks);
+  }, [version, refreshMarks]);
+
+  const askLink = async (selected: string): Promise<string | null> => {
+    const ask = requestLink ?? ((sel: string) => (typeof window !== 'undefined' && window.prompt ? window.prompt('Link URL', sel.startsWith('http') ? sel : 'https://') : null));
+    const raw = await ask(selected);
+    const safe = raw ? sanitizeHref(raw) : null;
+    if (!safe && raw) notify('That link is not allowed', () => undefined);
+    return safe;
+  };
+
+  const applyMark = (id: string, mark: InlineMark) => {
     if (locked || versionRef.current !== 2) return;
-    const el = editorEl(id);
-    if (!el) return;
-    const text = readText(el, { ignoreTrailingBr: true });
-    const off = getOffsets(el) ?? { start: text.length, end: text.length };
-    let href: string | undefined;
-    if (mark === 'link') {
-      const selected = text.slice(off.start, off.end);
-      const ask = requestLink ?? ((sel: string) => (typeof window !== 'undefined' && window.prompt ? window.prompt('Link URL', sel.startsWith('http') ? sel : 'https://') : null));
-      const raw = await ask(selected);
-      const safe = raw ? sanitizeHref(raw) : null;
-      if (!safe) {
-        if (raw) notify('That link is not allowed', () => undefined);
-        return;
-      }
-      href = safe;
+    richHandles.current.get(id)?.applyMark(mark);
+  };
+
+  /** v2 plans: join stored content without markers bleeding, caret at visible offsets. */
+  const v2 = version === 2;
+  const fixMergePlan = (plan: EditResult, keepId: string, first: string, second: string): EditResult => {
+    if (!v2) return plan;
+    return {
+      ...plan,
+      actions: plan.actions.map((a) => (a.type === 'patch' && a.id === keepId && a.patch.content !== undefined
+        ? { ...a, patch: { ...a.patch, content: joinContent(first, second) } }
+        : a)),
+      focus: plan.focus && plan.focus.id === keepId && typeof plan.focus.pos === 'number'
+        ? { id: keepId, pos: contentLength(first) }
+        : plan.focus,
+    };
+  };
+  const removeToken = (c: string, tokenStart: number, query: string) => {
+    if (!v2) return removeSlashToken(c, tokenStart, query);
+    const len = contentLength(c);
+    const plain = inlineToPlainText(c);
+    const token = `/${query}`;
+    const at = tokenStart >= 0 && plain.slice(tokenStart, tokenStart + token.length) === token ? tokenStart : -1;
+    if (at === -1) {
+      const m = /(^|\s)\/[^\s/]*$/.exec(plain);
+      if (!m) return { content: c, caret: len };
+      const cut = m.index + (m[1]?.length ?? 0);
+      return { content: sliceContent(c, 0, cut), caret: cut };
     }
-    const next = toggleInlineMark(text, off.start, off.end, mark, href);
-    if (next.content === text) return;
-    writeText(el, next.content);
-    el.focus({ preventScroll: true });
-    setSelectionRange(el, next.start, next.end);
-    dispatch({ type: 'patch', id, patch: { content: next.content } });
+    return { content: joinContent(sliceContent(c, 0, at), sliceContent(c, at + token.length)), caret: at };
   };
 
   const activeBlockId = (): string | null => {
@@ -415,7 +453,7 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
     if (version === 2 && isMediaType(cmd)) {
       const target = blocksRef.current.find((b) => b.id === s.blockId);
       if (!target) return;
-      const { content: rest } = removeSlashToken(target.content ?? '', s.tokenStart, s.query);
+      const { content: rest } = removeToken(target.content ?? '', s.tokenStart, s.query);
       dispatch({ type: 'patch', id: target.id, patch: { content: rest } });
       blocksRef.current = blocksRef.current.map((b) => (b.id === target.id ? { ...b, content: rest } : b));
       const id = placeMedia(target.id, cmd);
@@ -423,7 +461,7 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
       return;
     }
     const hostExtra = extraCommands?.find((c) => c.id === cmd);
-    const plan = slashPickPlan(blocksRef.current, s.blockId, s.tokenStart, s.query, cmd);
+    const plan = slashPickPlan(blocksRef.current, s.blockId, s.tokenStart, s.query, cmd, removeToken);
     runPlan(plan);
     if (plan.host) {
       if (plan.host.kind === 'mention') adapters?.mention?.({ blockId: plan.host.blockId, caret: plan.host.caret, query: '' });
@@ -516,18 +554,44 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
     setContent: (id, content) => dispatch({ type: 'patch', id, patch: { content } }),
     split: (id, before, after) => runPlan(splitBlockPlan(blocksRef.current, id, before, after)),
     mergePrev: (id, text) => {
-      const plan = mergePrevPlan(blocksRef.current, id, text);
+      const list = blocksRef.current;
+      const prev = list[list.findIndex((b) => b.id === id) - 1];
+      const plan = fixMergePlan(mergePrevPlan(list, id, text), prev?.id ?? '', prev?.content ?? '', text);
       runPlan(plan);
       if (slash?.blockId === id) setSlash(null);
     },
     mergeNext: (id, text) => {
-      const plan = mergeNextPlan(blocksRef.current, id, text);
+      const list = blocksRef.current;
+      const next = list[list.findIndex((b) => b.id === id) + 1];
+      const plan = fixMergePlan(mergeNextPlan(list, id, text), id, text, next?.content ?? '');
       if (plan.actions.length === 0) return false;
       runPlan(plan);
       return true;
     },
-    markdown: (id, md, text) => runPlan(markdownPlan(id, md, text)),
-    pasteLines: (id, before, lines, after) => runPlan(pasteLinesPlan(blocksRef.current, id, before, lines, after)),
+    markdown: (id, md, text) => {
+      const plan = markdownPlan(id, md, text);
+      if (v2 && md.kind === 'type') {
+        const rest = sliceContent(text, md.strip);
+        plan.actions = plan.actions.map((a) => (a.type === 'patch' && a.id === id ? { ...a, patch: { ...a.patch, content: rest } } : a));
+      }
+      runPlan(plan);
+    },
+    pasteLines: (id, before, lines, after) => {
+      if (!v2 || lines.length === 0) {
+        runPlan(pasteLinesPlan(blocksRef.current, id, before, lines, after));
+        return;
+      }
+      const last = lines.length - 1;
+      const joined = lines.map((l, i) => joinContent(i === 0 ? before : '', l, i === last ? after : ''));
+      const plan = pasteLinesPlan(blocksRef.current, id, '', joined, '');
+      if (plan.focus) {
+        plan.focus = {
+          id: plan.focus.id,
+          pos: last === 0 ? contentLength(before) + contentLength(lines[0]) : contentLength(lines[last]),
+        };
+      }
+      runPlan(plan);
+    },
     pasteFiles: (id, files) => {
       const images = files.filter((f) => f.type.startsWith('image/'));
       if (version === 2 && adapters?.uploadImage && images.length === files.length && images.length > 0) {
@@ -556,7 +620,10 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
       setDropHint(null);
     },
     inlineMarks: version === 2,
-    applyMark: (id, mark) => { void applyMark(id, mark); },
+    applyMark,
+    requestLink: askLink,
+    registerRich,
+    marksChanged: refreshMarks,
     patchMedia,
     uploads,
     pickImage,
@@ -588,9 +655,9 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
   const headings = useMemo(
     () => blocks
       .filter((b) => b.type === 'h1' || b.type === 'h2' || b.type === 'h3')
-      .map((b) => ({ id: b.id, type: b.type, label: (b.content ?? '').trim() }))
+      .map((b) => ({ id: b.id, type: b.type, label: (version === 2 ? inlineToPlainText(b.content) : (b.content ?? '')).trim() }))
       .filter((h) => h.label.length > 0),
-    [blocks],
+    [blocks, version],
   );
 
   const focusOrAppendLine = () => {
@@ -621,10 +688,11 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
                 className={`pe-format-btn pe-format-${f.mark}`}
                 title={`${f.label} (${f.keys})`}
                 aria-label={f.label}
+                aria-pressed={f.mark === 'link' ? !!activeMarks?.href : !!activeMarks?.[f.mark]}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   const id = activeBlockId();
-                  if (id) void applyMark(id, f.mark);
+                  if (id) applyMark(id, f.mark);
                 }}
               >
                 <f.icon className="pe-icon" aria-hidden="true" />
@@ -632,7 +700,7 @@ export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
             ))}
           </div>
         )}
-        <ShortcutsHelp />
+        <ShortcutsHelp inlineMarks={version === 2} />
       </div>
       {headings.length > 0 && (
         <nav className="pe-toc" aria-label="Document contents">
@@ -703,3 +771,9 @@ const FORMAT_BUTTONS: readonly {
   { mark: 'code', label: 'Inline code', icon: Code, keys: 'Ctrl/⌘+E' },
   { mark: 'link', label: 'Link', icon: Link2, keys: 'Ctrl/⌘+K' },
 ];
+
+function sameActive(a: Marks | null, b: Marks | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return !!a.bold === !!b.bold && !!a.italic === !!b.italic && !!a.code === !!b.code && (a.href ?? '') === (b.href ?? '');
+}
