@@ -4,19 +4,27 @@
  * without product stores, sockets, uploads, or auth.
  * Licensed under AGPL-3.0. See LICENSE and NOTICE.
  */
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Bold, Code, Italic, Link2 } from 'lucide-react';
 import {
-  blockId, emptyText, isEditable, isEmptyContent, reducer,
+  blockId, emptyText, isEditable, isEmptyContent, reducer, removeSlashToken,
 } from '../blocks';
 import { extraCommandsFromAdapters, SLASH_COMMANDS, type CommandDef } from '../commands';
 import { placeCaretNearX, setCaret } from '../dom';
 import {
-  markdownPlan, mergeNextPlan, mergePrevPlan, pasteLinesPlan, slashPickPlan, splitBlockPlan,
+  markdownPlan, mergeNextPlan, mergePrevPlan, pasteLinesPlan, slashPickPlan, splitBlockPlan, type EditResult,
 } from '../editing';
-import { documentsEqual, emptyDocument, parseDocument } from '../schema';
-import type { Block, EditorDocument, ExtraSlashCommand, HostAdapters } from '../types';
+import { documentsEqual, emptyDocument, migrateDocument, parseAnyDocument } from '../schema';
+import type {
+  AnyBlock, AnyEditorDocument, Block, DocumentVersion, EditorDocument, ExtraSlashCommand, HostAdapters,
+  VideoProvider,
+} from '../types';
 import { DocumentParseError } from '../errors';
-import { BlockRow, type EditorApi, type SlashOpen } from './BlockCanvas';
+import { inlineToPlainText, type InlineMark } from '../inline';
+import { contentLength, joinContent, sliceContent, type Marks } from '../rich';
+import { DEFAULT_VIDEO_PROVIDERS, providerLabel, sanitizeImageSrc } from '../media';
+import { sanitizeHref } from '../sanitize';
+import { BlockRow, type EditorApi, type PendingUpload, type RichHandle, type SlashOpen } from './BlockCanvas';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SlashMenu } from './SlashMenu';
 import { useBlockSelection } from './useBlockSelection';
@@ -25,9 +33,20 @@ const DRAG_MIME = 'application/x-page-editor-block';
 
 type CaretPos = 'start' | 'end' | number;
 
-export type BlockEditorProps = {
-  value?: EditorDocument | null;
-  onChange?: (next: EditorDocument) => void;
+export type BlockEditorProps<D extends AnyEditorDocument = EditorDocument> = {
+  value?: D | null;
+  onChange?: (next: D) => void;
+  /**
+   * Version to emit. Defaults to the version of `value` (1 when empty), so
+   * existing hosts keep getting v1 documents. Pass 2 to enable inline marks
+   * (Cmd/Ctrl+B, I, E, K and the format bar), image and video blocks; v1
+   * values are migrated with `migrateDocument()`.
+   */
+  documentVersion?: DocumentVersion;
+  /** v2 only. Providers allowed in Video blocks. Default: Vimeo only. */
+  videoProviders?: readonly VideoProvider[];
+  /** v2 only. Ask for a link URL (Cmd/Ctrl+K). Default: `window.prompt`. Return null to cancel. */
+  requestLink?: (selectedText: string) => string | null | Promise<string | null>;
   readOnly?: boolean;
   disabled?: boolean;
   placeholder?: string;
@@ -70,9 +89,38 @@ function dispatchAll(dispatch: React.Dispatch<import('../blocks').Action>, actio
   for (const a of actions) dispatch(a);
 }
 
-export function BlockEditor({
+const MEDIA_COMMANDS = {
+  image: { id: 'image', label: 'Image', hint: 'Upload an image', keywords: 'picture photo img upload media', group: 'create' as const },
+  video: { id: 'video', label: 'Video', hint: 'Embed a video', keywords: 'vimeo youtube embed media movie', group: 'create' as const },
+};
+
+function isMediaType(t: string): t is 'image' | 'video' {
+  return t === 'image' || t === 'video';
+}
+
+/** Pending media (no src / video id yet) lives in the canvas only, never in emitted documents. */
+function emittable(blocks: Block[]): Block[] {
+  return blocks.filter((b) => {
+    const a = b as unknown as AnyBlock;
+    if (a.type === 'image') return !!sanitizeImageSrc(a.src);
+    if (a.type === 'video') return !!(a.provider && a.videoId);
+    return true;
+  });
+}
+
+function toDoc(version: DocumentVersion, blocks: Block[]): AnyEditorDocument {
+  const list = emittable(blocks);
+  return version === 2
+    ? { version: 2, blocks: (list.length ? list : [emptyText()]) as AnyEditorDocument['blocks'] }
+    : { version: 1, blocks: list.length ? list : [emptyText()] };
+}
+
+export function BlockEditor<D extends AnyEditorDocument = EditorDocument>({
   value,
   onChange,
+  documentVersion,
+  videoProviders = DEFAULT_VIDEO_PROVIDERS,
+  requestLink,
   readOnly = false,
   disabled = false,
   placeholder = "Press '/' for commands",
@@ -81,8 +129,15 @@ export function BlockEditor({
   extraCommands,
   className,
   onParseError,
-}: BlockEditorProps) {
+}: BlockEditorProps<D>) {
   const locked = readOnly || disabled;
+  const valueVersion = value && typeof value === 'object' && (value as { version?: unknown }).version === 2 ? 2 : 1;
+  const version: DocumentVersion = documentVersion ?? valueVersion;
+  const versionRef = useRef(version);
+  versionRef.current = version;
+  const [uploads, setUploads] = useState<Record<string, PendingUpload>>({});
+  const uploadFiles = useRef(new Map<string, File>());
+  const uploadControllers = useRef(new Map<string, AbortController>());
   const [blocks, dispatch] = useReducer(reducer, emptyDocument().blocks);
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
@@ -93,7 +148,7 @@ export function BlockEditor({
   const [dropHint, setDropHint] = useState<{ id: string; pos: 'before' | 'after' } | null>(null);
   const dragIdRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const lastEmitted = useRef<EditorDocument | null>(null);
+  const lastEmitted = useRef<AnyEditorDocument | null>(null);
 
   useEffect(() => {
     if (value == null) {
@@ -105,26 +160,35 @@ export function BlockEditor({
       return;
     }
     try {
-      const parsed = parseDocument(value);
+      let parsed = parseAnyDocument(value);
+      if (versionRef.current === 2 && parsed.version === 1) parsed = migrateDocument(parsed);
+      if (versionRef.current === 1 && parsed.version === 2) {
+        throw new DocumentParseError('unsupported_document', 'documentVersion is 1 but the value is a version 2 document.');
+      }
       if (lastEmitted.current && documentsEqual(parsed, lastEmitted.current)) return;
-      if (documentsEqual(parsed, { version: 1, blocks: blocksRef.current })) return;
+      if (documentsEqual(parsed, toDoc(versionRef.current, blocksRef.current))) return;
       skipEmitRef.current = true;
-      dispatch({ type: 'replace', blocks: parsed.blocks });
+      dispatch({ type: 'replace', blocks: parsed.blocks as Block[] });
     } catch (err) {
       if (err instanceof DocumentParseError) onParseError?.(err);
     }
   }, [value, onParseError]);
 
   useEffect(() => {
+    const next = toDoc(versionRef.current, blocks);
     if (skipEmitRef.current) {
       skipEmitRef.current = false;
-      lastEmitted.current = { version: 1, blocks };
+      lastEmitted.current = next as EditorDocument;
       return;
     }
-    const next: EditorDocument = { version: 1, blocks };
-    lastEmitted.current = next;
-    onChange?.(next);
+    if (lastEmitted.current && documentsEqual(next, lastEmitted.current)) return;
+    lastEmitted.current = next as EditorDocument;
+    onChange?.(next as D);
   }, [blocks, onChange]);
+
+  useEffect(() => () => {
+    for (const c of uploadControllers.current.values()) c.abort();
+  }, []);
 
   const focusAfterRender = (id: string, pos: CaretPos = 'end') => {
     const req = { id, pos };
@@ -148,6 +212,7 @@ export function BlockEditor({
     focusAfterRender,
     canvasRef,
     notify: locked ? undefined : notify,
+    inlineMarks: version === 2,
   });
 
   const insertAfter = (afterId: string | null, b?: Partial<Block>) => {
@@ -196,12 +261,207 @@ export function BlockEditor({
     return plan;
   };
 
+  const setUpload = (id: string, next: PendingUpload | null) => {
+    setUploads((prev) => {
+      const copy = { ...prev };
+      if (next) copy[id] = next;
+      else delete copy[id];
+      return copy;
+    });
+  };
+
+  const patchMedia = (id: string, patch: Partial<AnyBlock>) => {
+    dispatch({ type: 'patch', id, patch: patch as unknown as Partial<Block> });
+  };
+
+  const startImageUpload = (id: string, file: File) => {
+    const upload = adapters?.uploadImage;
+    if (!upload) return;
+    uploadControllers.current.get(id)?.abort();
+    const controller = new AbortController();
+    uploadControllers.current.set(id, controller);
+    uploadFiles.current.set(id, file);
+    setUpload(id, { fileName: file.name || 'image', progress: 0 });
+    const finish = () => {
+      if (uploadControllers.current.get(id) === controller) uploadControllers.current.delete(id);
+    };
+    upload(file, {
+      blockId: id,
+      signal: controller.signal,
+      onProgress: (fraction) => {
+        if (controller.signal.aborted) return;
+        setUploads((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id]!, progress: fraction } } : prev));
+      },
+    }).then((res) => {
+      finish();
+      if (controller.signal.aborted) return;
+      const src = sanitizeImageSrc(res?.src);
+      if (!src) {
+        setUpload(id, { fileName: file.name || 'image', progress: 0, error: 'Upload returned an unusable image URL.' });
+        return;
+      }
+      const current = blocksRef.current.find((b) => b.id === id) as AnyBlock | undefined;
+      patchMedia(id, {
+        src,
+        alt: current?.alt || res.alt || '',
+        ...(res.assetKey ? { assetKey: res.assetKey } : { assetKey: undefined }),
+      });
+      uploadFiles.current.delete(id);
+      setUpload(id, null);
+    }, (err: unknown) => {
+      finish();
+      if (controller.signal.aborted) return;
+      const message = err instanceof Error && err.message ? err.message : 'Upload failed.';
+      setUpload(id, { fileName: file.name || 'image', progress: 0, error: message });
+    });
+  };
+
+  const pickImage = (id: string) => {
+    if (!adapters?.uploadImage || locked) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) startImageUpload(id, file);
+      else cancelIfEmpty(id);
+      input.remove();
+    });
+    input.addEventListener('cancel', () => {
+      cancelIfEmpty(id);
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  const cancelIfEmpty = (id: string) => {
+    const b = blocksRef.current.find((x) => x.id === id) as AnyBlock | undefined;
+    if (b && b.type === 'image' && !b.src && !uploadControllers.current.has(id)) removeBlock(id, { focus: 'prev' });
+  };
+
+  const cancelUpload = (id: string) => {
+    uploadControllers.current.get(id)?.abort();
+    uploadControllers.current.delete(id);
+    uploadFiles.current.delete(id);
+    setUpload(id, null);
+    const b = blocksRef.current.find((x) => x.id === id) as AnyBlock | undefined;
+    if (b && !b.src) removeBlock(id, { focus: 'prev' });
+  };
+
+  const retryUpload = (id: string) => {
+    const file = uploadFiles.current.get(id);
+    if (file) startImageUpload(id, file);
+    else pickImage(id);
+  };
+
+  /** Turn an empty text block into media, or insert media after it. Returns the media block id. */
+  const placeMedia = (targetId: string, kind: 'image' | 'video'): string => {
+    const target = blocksRef.current.find((b) => b.id === targetId);
+    const base: Partial<AnyBlock> = kind === 'image' ? { type: 'image', alt: '' } : { type: 'video' };
+    if (target && target.type === 'text' && isEmptyContent(target.content)) {
+      dispatch({ type: 'patch', id: targetId, patch: { ...base, content: undefined } as unknown as Partial<Block> });
+      return targetId;
+    }
+    const block = { id: blockId(), ...base } as unknown as Block;
+    dispatch({ type: 'insert', after: targetId, block });
+    return block.id;
+  };
+
+  const insertImages = (targetId: string, files: File[]) => {
+    let anchor = targetId;
+    files.forEach((file) => {
+      const id = placeMedia(anchor, 'image');
+      startImageUpload(id, file);
+      anchor = id;
+    });
+  };
+
+  const richHandles = useRef(new Map<string, RichHandle>());
+  const [activeMarks, setActiveMarks] = useState<Marks | null>(null);
+  const refreshMarks = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const id = active?.getAttribute?.('data-block-id');
+    const next = (id && richHandles.current.get(id)?.marks()) || null;
+    setActiveMarks((prev) => (sameActive(prev, next) ? prev : next));
+  }, []);
+  const registerRich = useCallback((id: string, handle: RichHandle) => {
+    richHandles.current.set(id, handle);
+    return () => {
+      if (richHandles.current.get(id) === handle) richHandles.current.delete(id);
+    };
+  }, []);
+  useEffect(() => {
+    if (version !== 2) return;
+    document.addEventListener('selectionchange', refreshMarks);
+    return () => document.removeEventListener('selectionchange', refreshMarks);
+  }, [version, refreshMarks]);
+
+  const askLink = async (selected: string): Promise<string | null> => {
+    const ask = requestLink ?? ((sel: string) => (typeof window !== 'undefined' && window.prompt ? window.prompt('Link URL', sel.startsWith('http') ? sel : 'https://') : null));
+    const raw = await ask(selected);
+    const safe = raw ? sanitizeHref(raw) : null;
+    if (!safe && raw) notify('That link is not allowed', () => undefined);
+    return safe;
+  };
+
+  const applyMark = (id: string, mark: InlineMark) => {
+    if (locked || versionRef.current !== 2) return;
+    richHandles.current.get(id)?.applyMark(mark);
+  };
+
+  /** v2 plans: join stored content without markers bleeding, caret at visible offsets. */
+  const v2 = version === 2;
+  const fixMergePlan = (plan: EditResult, keepId: string, first: string, second: string): EditResult => {
+    if (!v2) return plan;
+    return {
+      ...plan,
+      actions: plan.actions.map((a) => (a.type === 'patch' && a.id === keepId && a.patch.content !== undefined
+        ? { ...a, patch: { ...a.patch, content: joinContent(first, second) } }
+        : a)),
+      focus: plan.focus && plan.focus.id === keepId && typeof plan.focus.pos === 'number'
+        ? { id: keepId, pos: contentLength(first) }
+        : plan.focus,
+    };
+  };
+  const removeToken = (c: string, tokenStart: number, query: string) => {
+    if (!v2) return removeSlashToken(c, tokenStart, query);
+    const len = contentLength(c);
+    const plain = inlineToPlainText(c);
+    const token = `/${query}`;
+    const at = tokenStart >= 0 && plain.slice(tokenStart, tokenStart + token.length) === token ? tokenStart : -1;
+    if (at === -1) {
+      const m = /(^|\s)\/[^\s/]*$/.exec(plain);
+      if (!m) return { content: c, caret: len };
+      const cut = m.index + (m[1]?.length ?? 0);
+      return { content: sliceContent(c, 0, cut), caret: cut };
+    }
+    return { content: joinContent(sliceContent(c, 0, at), sliceContent(c, at + token.length)), caret: at };
+  };
+
+  const activeBlockId = (): string | null => {
+    const active = document.activeElement as HTMLElement | null;
+    const id = active?.getAttribute?.('data-block-id');
+    return id && blocksRef.current.some((b) => b.id === id) ? id : null;
+  };
+
   const onPickSlash = (cmd: string) => {
     const s = slash;
     if (!s) return;
     setSlash(null);
+    if (version === 2 && isMediaType(cmd)) {
+      const target = blocksRef.current.find((b) => b.id === s.blockId);
+      if (!target) return;
+      const { content: rest } = removeToken(target.content ?? '', s.tokenStart, s.query);
+      dispatch({ type: 'patch', id: target.id, patch: { content: rest } });
+      blocksRef.current = blocksRef.current.map((b) => (b.id === target.id ? { ...b, content: rest } : b));
+      const id = placeMedia(target.id, cmd);
+      if (cmd === 'image') pickImage(id);
+      return;
+    }
     const hostExtra = extraCommands?.find((c) => c.id === cmd);
-    const plan = slashPickPlan(blocksRef.current, s.blockId, s.tokenStart, s.query, cmd);
+    const plan = slashPickPlan(blocksRef.current, s.blockId, s.tokenStart, s.query, cmd, removeToken);
     runPlan(plan);
     if (plan.host) {
       if (plan.host.kind === 'mention') adapters?.mention?.({ blockId: plan.host.blockId, caret: plan.host.caret, query: '' });
@@ -294,19 +554,50 @@ export function BlockEditor({
     setContent: (id, content) => dispatch({ type: 'patch', id, patch: { content } }),
     split: (id, before, after) => runPlan(splitBlockPlan(blocksRef.current, id, before, after)),
     mergePrev: (id, text) => {
-      const plan = mergePrevPlan(blocksRef.current, id, text);
+      const list = blocksRef.current;
+      const prev = list[list.findIndex((b) => b.id === id) - 1];
+      const plan = fixMergePlan(mergePrevPlan(list, id, text), prev?.id ?? '', prev?.content ?? '', text);
       runPlan(plan);
       if (slash?.blockId === id) setSlash(null);
     },
     mergeNext: (id, text) => {
-      const plan = mergeNextPlan(blocksRef.current, id, text);
+      const list = blocksRef.current;
+      const next = list[list.findIndex((b) => b.id === id) + 1];
+      const plan = fixMergePlan(mergeNextPlan(list, id, text), id, text, next?.content ?? '');
       if (plan.actions.length === 0) return false;
       runPlan(plan);
       return true;
     },
-    markdown: (id, md, text) => runPlan(markdownPlan(id, md, text)),
-    pasteLines: (id, before, lines, after) => runPlan(pasteLinesPlan(blocksRef.current, id, before, lines, after)),
+    markdown: (id, md, text) => {
+      const plan = markdownPlan(id, md, text);
+      if (v2 && md.kind === 'type') {
+        const rest = sliceContent(text, md.strip);
+        plan.actions = plan.actions.map((a) => (a.type === 'patch' && a.id === id ? { ...a, patch: { ...a.patch, content: rest } } : a));
+      }
+      runPlan(plan);
+    },
+    pasteLines: (id, before, lines, after) => {
+      if (!v2 || lines.length === 0) {
+        runPlan(pasteLinesPlan(blocksRef.current, id, before, lines, after));
+        return;
+      }
+      const last = lines.length - 1;
+      const joined = lines.map((l, i) => joinContent(i === 0 ? before : '', l, i === last ? after : ''));
+      const plan = pasteLinesPlan(blocksRef.current, id, '', joined, '');
+      if (plan.focus) {
+        plan.focus = {
+          id: plan.focus.id,
+          pos: last === 0 ? contentLength(before) + contentLength(lines[0]) : contentLength(lines[last]),
+        };
+      }
+      runPlan(plan);
+    },
     pasteFiles: (id, files) => {
+      const images = files.filter((f) => f.type.startsWith('image/'));
+      if (version === 2 && adapters?.uploadImage && images.length === files.length && images.length > 0) {
+        insertImages(id, images);
+        return;
+      }
       if (files.length && adapters?.upload) void adapters.upload(files, { blockId: id });
     },
     navigate,
@@ -328,6 +619,18 @@ export function BlockEditor({
       dragIdRef.current = null;
       setDropHint(null);
     },
+    inlineMarks: version === 2,
+    applyMark,
+    requestLink: askLink,
+    registerRich,
+    marksChanged: refreshMarks,
+    patchMedia,
+    uploads,
+    pickImage,
+    retryUpload,
+    cancelUpload,
+    canUploadImages: !!adapters?.uploadImage,
+    videoProviders,
   };
 
   const commands: CommandDef[] = useMemo(() => {
@@ -339,15 +642,22 @@ export function BlockEditor({
       keywords: c.keywords ?? '',
       group: 'create' as const,
     }));
-    return [...SLASH_COMMANDS, ...host, ...extras];
-  }, [adapters, extraCommands]);
+    const media: CommandDef[] = [];
+    if (version === 2) {
+      if (adapters?.uploadImage) media.push(MEDIA_COMMANDS.image);
+      if (videoProviders.length) {
+        media.push({ ...MEDIA_COMMANDS.video, hint: `Embed a ${videoProviders.map(providerLabel).join(' or ')} video` });
+      }
+    }
+    return [...SLASH_COMMANDS, ...media, ...host, ...extras];
+  }, [adapters, extraCommands, version, videoProviders]);
 
   const headings = useMemo(
     () => blocks
       .filter((b) => b.type === 'h1' || b.type === 'h2' || b.type === 'h3')
-      .map((b) => ({ id: b.id, type: b.type, label: (b.content ?? '').trim() }))
+      .map((b) => ({ id: b.id, type: b.type, label: (version === 2 ? inlineToPlainText(b.content) : (b.content ?? '')).trim() }))
       .filter((h) => h.label.length > 0),
-    [blocks],
+    [blocks, version],
   );
 
   const focusOrAppendLine = () => {
@@ -369,7 +679,28 @@ export function BlockEditor({
             <button type="button" onClick={() => { notice.undo(); setNotice(null); }}>Undo</button>
           </div>
         )}
-        <ShortcutsHelp />
+        {version === 2 && !locked && (
+          <div className="pe-format" role="toolbar" aria-label="Text formatting">
+            {FORMAT_BUTTONS.map((f) => (
+              <button
+                key={f.mark}
+                type="button"
+                className={`pe-format-btn pe-format-${f.mark}`}
+                title={`${f.label} (${f.keys})`}
+                aria-label={f.label}
+                aria-pressed={f.mark === 'link' ? !!activeMarks?.href : !!activeMarks?.[f.mark]}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const id = activeBlockId();
+                  if (id) applyMark(id, f.mark);
+                }}
+              >
+                <f.icon className="pe-icon" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        )}
+        <ShortcutsHelp inlineMarks={version === 2} />
       </div>
       {headings.length > 0 && (
         <nav className="pe-toc" aria-label="Document contents">
@@ -430,4 +761,19 @@ export function BlockEditor({
       )}
     </div>
   );
+}
+
+const FORMAT_BUTTONS: readonly {
+  mark: InlineMark; label: string; icon: typeof Bold; keys: string;
+}[] = [
+  { mark: 'bold', label: 'Bold', icon: Bold, keys: 'Ctrl/⌘+B' },
+  { mark: 'italic', label: 'Italic', icon: Italic, keys: 'Ctrl/⌘+I' },
+  { mark: 'code', label: 'Inline code', icon: Code, keys: 'Ctrl/⌘+E' },
+  { mark: 'link', label: 'Link', icon: Link2, keys: 'Ctrl/⌘+K' },
+];
+
+function sameActive(a: Marks | null, b: Marks | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return !!a.bold === !!b.bold && !!a.italic === !!b.italic && !!a.code === !!b.code && (a.href ?? '') === (b.href ?? '');
 }

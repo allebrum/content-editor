@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type RefObject } from 'react';
 import type { Block as SpaceBlock } from '../types';
 import { blockId, emptyText, pastedLines, type Action } from '../blocks';
+import { escapeInline } from '../inline';
 import {
   blocksToHtml, blocksToPlainText, extendSelection, listNumbers, pruneSelection,
   selectAll as selectAllRange, selectedIds, selectionFromEdge, type BlockSelection,
@@ -67,6 +68,7 @@ export function useBlockSelection({
   focusAfterRender,
   canvasRef,
   notify,
+  inlineMarks = false,
 }: {
   blocks: SpaceBlock[];
   blocksRef: MutableRefObject<SpaceBlock[]>;
@@ -74,7 +76,10 @@ export function useBlockSelection({
   focusAfterRender: (id: string, pos?: 'start' | 'end' | number) => void;
   canvasRef: RefObject<HTMLElement | null>;
   notify?: (label: string, undo: () => void) => void;
+  /** v2 documents: copy formatted text and escape typed or pasted markers. */
+  inlineMarks?: boolean;
 }) {
+  const literal = useCallback((text: string) => (inlineMarks ? escapeInline(text) : text), [inlineMarks]);
   const [sel, setSel] = useState<BlockSelection | null>(null);
   const selRef = useRef(sel);
   selRef.current = sel;
@@ -97,8 +102,12 @@ export function useBlockSelection({
     const set = new Set(selectedIds(list, selRef.current));
     const chosen = list.filter((b) => set.has(b.id));
     const numbers = listNumbers(list);
-    return { chosen, text: blocksToPlainText(chosen, numbers), html: blocksToHtml(chosen, numbers) };
-  }, [blocksRef]);
+    return {
+      chosen,
+      text: blocksToPlainText(chosen, numbers, { inlineMarks }),
+      html: blocksToHtml(chosen, numbers, { inlineMarks }),
+    };
+  }, [blocksRef, inlineMarks]);
 
   // Mirror the selection into the sink and keep its text natively selected.
   useLayoutEffect(() => {
@@ -192,7 +201,7 @@ export function useBlockSelection({
       if (!raw) return;
       const lines = pastedLines(raw);
       while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-      replaceSelected(lines.map((content) => ({ id: blockId(), type: 'text' as const, content })), 'replaced');
+      replaceSelected(lines.map((content) => ({ id: blockId(), type: 'text' as const, content: literal(content) })), 'replaced');
     };
     document.addEventListener('copy', copy);
     document.addEventListener('cut', cut);
@@ -202,7 +211,7 @@ export function useBlockSelection({
       document.removeEventListener('cut', cut);
       document.removeEventListener('paste', paste);
     };
-  }, [payload, replaceSelected]);
+  }, [payload, replaceSelected, literal]);
 
   // ----- keyboard while blocks are selected -----
   const onSinkKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -259,7 +268,7 @@ export function useBlockSelection({
     // Typing replaces the selection with a new line holding that character.
     if (e.key.length === 1 && !e.altKey) {
       stop();
-      replaceSelected([{ id: blockId(), type: 'text', content: e.key }], 'replaced');
+      replaceSelected([{ id: blockId(), type: 'text', content: literal(e.key) }], 'replaced');
     }
   };
 

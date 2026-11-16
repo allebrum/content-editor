@@ -240,3 +240,35 @@ export function placeCaretNearX(el: HTMLElement, x: number, line: 'first' | 'las
   }
   setCaret(el, line === 'first' ? 0 : Infinity);
 }
+
+function pointAt(el: HTMLElement, offset: number): { node: Node; offset: number } | null {
+  let remaining = Math.max(0, offset);
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    const v = node.data;
+    for (let i = 0; i <= v.length; i++) {
+      if (remaining === 0) return { node, offset: i };
+      if (i < v.length && v[i] !== ZWSP) remaining--;
+    }
+    node = walker.nextNode() as Text | null;
+  }
+  return null;
+}
+
+/** Select text offsets `start`–`end` inside `el` (falls back to a caret at `end`). */
+export function setSelectionRange(el: HTMLElement, start: number, end: number): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const a = pointAt(el, start);
+  const b = pointAt(el, end);
+  if (!a || !b) {
+    setCaret(el, end);
+    return;
+  }
+  const range = document.createRange();
+  range.setStart(a.node, a.offset);
+  range.setEnd(b.node, b.offset);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}

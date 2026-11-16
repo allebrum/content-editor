@@ -9,6 +9,7 @@ import { HelpCircle, X } from 'lucide-react';
 import { buildNotesHelp, isHelpHotkey } from '../help';
 
 const SECTIONS = buildNotesHelp();
+const RICH_SECTIONS = buildNotesHelp({ inlineMarks: true });
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -16,7 +17,9 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable;
 }
 
-export function ShortcutsHelp() {
+/** `inlineMarks`: also list the v2 inline formatting shortcuts. */
+export function ShortcutsHelp({ inlineMarks = false }: { inlineMarks?: boolean } = {}) {
+  const sections = inlineMarks ? RICH_SECTIONS : SECTIONS;
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -86,7 +89,7 @@ export function ShortcutsHelp() {
               </button>
             </div>
             <div className="pe-help-body">
-              {SECTIONS.map((s) => (
+              {sections.map((s) => (
                 <section key={s.id} className="pe-help-section">
                   <h3>{s.title}</h3>
                   {s.note && <p className="pe-help-note">{s.note}</p>}

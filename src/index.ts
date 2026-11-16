@@ -47,3 +47,50 @@ export type { NotesDraft, DraftStorage } from './drafts';
 export { buildNotesHelp, isHelpHotkey, MARKDOWN_HELP } from './help';
 export { escapeHtml, sanitizeHref, isSafeHref } from './sanitize';
 export { renderDocumentHtml, renderBlockHtml } from './render-html';
+
+// Version 2: media blocks and inline marks (additive; see MIGRATION.md).
+export type {
+  AnyBlock,
+  AnyBlockType,
+  AnyEditorDocument,
+  DocumentVersion,
+  EditorDocumentV2,
+  ImageBlock,
+  ImageUploadContext,
+  ImageUploadResult,
+  MediaBlockType,
+  VideoBlock,
+  VideoProvider,
+} from './types';
+export {
+  LATEST_DOCUMENT_VERSION, SUPPORTED_DOCUMENT_VERSIONS, MEDIA_BLOCK_TYPES, VIDEO_PROVIDERS,
+} from './types';
+export {
+  parseAnyDocument, migrateDocument, emptyDocumentV2, documentFromPlainText,
+} from './schema';
+export {
+  parseInline, escapeInline, inlineToPlainText, inlineNodesToText, inlineNodesToHtml, renderInlineHtml,
+  toggleInlineMark, LINK_REL,
+} from './inline';
+export type { InlineNode, InlineMark } from './inline';
+export {
+  parseVideoUrl, videoEmbedUrl, videoWatchUrl, sanitizeImageSrc, isValidVideoId, isValidVimeoHash,
+  providerLabel, DEFAULT_VIDEO_PROVIDERS, VIDEO_IFRAME_ATTRS, MAX_URL_LENGTH, MAX_ALT_LENGTH,
+  MAX_CAPTION_LENGTH, MIN_IMAGE_WIDTH, MAX_IMAGE_WIDTH,
+} from './media';
+export type { ParsedVideo } from './media';
+export { renderAnyBlockHtml } from './render-html';
+export type { RenderHtmlOptions } from './render-html';
+export { InlineContent, VideoEmbed } from './renderer';
+export type { BlockRendererProps } from './renderer';
+export { IMAGE_WIDTH_OPTIONS } from './components/BlockCanvas';
+
+// WYSIWYG inline marks (v2): DOM-free content model and paste sanitizer.
+export {
+  richFromContent, serializeRich, canonicalContent, contentLength, sliceContent, joinContent,
+  insertRich, insertContent, toggleRichMark, activeMarks, autoFormat, AUTOFORMAT_TRIGGERS,
+} from './rich';
+export type { Marks, RichChar, RichSegment } from './rich';
+export { MARK_SEPARATOR } from './inline';
+export { htmlToContentLines } from './rich-dom';
+export { INLINE_FORMAT_HELP } from './help';

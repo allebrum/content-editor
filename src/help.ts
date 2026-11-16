@@ -78,9 +78,26 @@ export function slashCommandSections(): HelpSection[] {
   }));
 }
 
-export function buildNotesHelp(): HelpSection[] {
+/** Inline formatting in version 2 documents (WYSIWYG). */
+export const INLINE_FORMAT_HELP: readonly HelpRow[] = [
+  { keys: ['Ctrl/⌘', 'B'], label: 'Bold', hint: 'With nothing selected, toggles bold for what you type next' },
+  { keys: ['Ctrl/⌘', 'I'], label: 'Italic' },
+  { keys: ['Ctrl/⌘', 'E'], label: 'Inline code' },
+  { keys: ['Ctrl/⌘', 'K'], label: 'Add a link to the selection', hint: 'Inside a link, removes it' },
+  { keys: ['**text**'], label: 'Type to make bold', hint: '__text__ works too' },
+  { keys: ['*text*'], label: 'Type to make italic', hint: '_text_ works too' },
+  { keys: ['`text`'], label: 'Type to make inline code' },
+  { keys: ['[text](https://…)'], label: 'Type to make a link' },
+  { keys: ['Ctrl/⌘', 'Z'], label: 'Undo in this block', hint: 'Right after a typed shortcut, brings the markers back' },
+  { keys: ['Ctrl/⌘', 'Shift', 'Z'], label: 'Redo', hint: 'Ctrl+Y works too' },
+];
+
+export function buildNotesHelp(opts: { inlineMarks?: boolean } = {}): HelpSection[] {
   return [
     ...slashCommandSections(),
+    ...(opts.inlineMarks
+      ? [{ id: 'inline', title: 'Formatting', note: 'Select text, or type the markers; they disappear as you finish.', rows: [...INLINE_FORMAT_HELP] }]
+      : []),
     {
       id: 'markdown',
       title: 'Markdown shortcuts',

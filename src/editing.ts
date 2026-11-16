@@ -143,10 +143,12 @@ export function slashPickPlan(
   tokenStart: number,
   query: string,
   cmd: string,
+  /** How to cut the `/query` token out of the content (v2 editors pass a marks-aware version). */
+  removeToken: (content: string, tokenStart: number, query: string) => { content: string; caret: number } = removeSlashToken,
 ): EditResult {
   const target = blocks.find((b) => b.id === blockIdTarget);
   if (!target) return { actions: [] };
-  const { content: rest, caret } = removeSlashToken(target.content ?? '', tokenStart, query);
+  const { content: rest, caret } = removeToken(target.content ?? '', tokenStart, query);
 
   if (
     cmd === 'h1' || cmd === 'h2' || cmd === 'h3' || cmd === 'text' ||

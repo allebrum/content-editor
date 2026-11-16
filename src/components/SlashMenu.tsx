@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, CheckSquare,
-  Quote, Sparkles, Minus, AtSign, Upload, Link as LinkIcon,
+  Quote, Sparkles, Minus, AtSign, Upload, Link as LinkIcon, Image as ImageIcon, Video,
 } from 'lucide-react';
 import { fuzzyScore } from '../blocks';
 import { SLASH_COMMANDS, SLASH_GROUP_LABELS, type CommandDef } from '../commands';
@@ -27,6 +27,8 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   mention: AtSign,
   upload: Upload,
   embed: LinkIcon,
+  image: ImageIcon,
+  video: Video,
 };
 
 export function SlashMenu({
